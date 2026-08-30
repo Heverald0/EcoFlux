@@ -91,5 +91,33 @@ public class ManipuladorExcecoesGlobal {
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(erro);
     }
 
+    @ExceptionHandler(ExcecaoRecursoNaoEncontrado.class)
+    public ResponseEntity<RespostaErro> manipularRecursoNaoEncontrado(
+            ExcecaoRecursoNaoEncontrado excecao,
+            HttpServletRequest requisicao
+    ) {
+        RespostaErro erro = new RespostaErro(
+                HttpStatus.NOT_FOUND.value(),
+                HttpStatus.NOT_FOUND.getReasonPhrase(),
+                excecao.getMessage(),
+                requisicao.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(erro);
+    }
+
+    @ExceptionHandler(ExcecaoConflitoNegocio.class)
+    public ResponseEntity<RespostaErro> manipularConflitoNegocio(
+            ExcecaoConflitoNegocio excecao,
+            HttpServletRequest requisicao
+    ) {
+        RespostaErro erro = new RespostaErro(
+                HttpStatus.CONFLICT.value(),
+                HttpStatus.CONFLICT.getReasonPhrase(),
+                excecao.getMessage(),
+                requisicao.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(erro);
+    }
+
     
 }
