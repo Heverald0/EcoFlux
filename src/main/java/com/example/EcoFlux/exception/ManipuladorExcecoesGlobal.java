@@ -61,4 +61,35 @@ public class ManipuladorExcecoesGlobal {
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(erro);
     }
+
+    @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)
+    public ResponseEntity<RespostaErro> manipularFalhaAutenticacao(
+            org.springframework.security.core.AuthenticationException excecao,
+            HttpServletRequest requisicao
+    ) {
+        RespostaErro erro = new RespostaErro(
+                HttpStatus.UNAUTHORIZED.value(),
+                HttpStatus.UNAUTHORIZED.getReasonPhrase(),
+                "Credenciais invalidas. Verifique seu e-mail e senha.",
+                requisicao.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(erro);
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<RespostaErro> manipularMetodoNaoSuportado(
+            org.springframework.web.HttpRequestMethodNotSupportedException excecao,
+            HttpServletRequest requisicao
+    ) {
+        RespostaErro erro = new RespostaErro(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                HttpStatus.METHOD_NOT_ALLOWED.getReasonPhrase(),
+                String.format("Metodo HTTP '%s' nao e suportado para esta rota. Metodos permitidos: %s", 
+                        excecao.getMethod(), java.util.Arrays.toString(excecao.getSupportedMethods())),
+                requisicao.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(erro);
+    }
+
+    
 }
