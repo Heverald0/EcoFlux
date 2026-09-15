@@ -2,6 +2,8 @@ from pathlib import Path
 
 from nicegui import app, ui
 
+import pages  # noqa: F401  (registra as rotas das telas internas)
+
 
 ASSETS_DIR = Path(__file__).parent / 'assets'
 app.add_static_file(
@@ -359,7 +361,7 @@ def login_page() -> None:
         if not email.value or not password.value:
             ui.notify('Preencha o e-mail e a senha.', type='warning')
             return
-        ui.notify('Login realizado com sucesso!', type='positive')
+        ui.navigate.to('/dashboard')
 
     with ui.element('main').classes('login-page'):
         brand_panel()
@@ -428,6 +430,7 @@ def registration_page() -> None:
             ui.notify('Você precisa aceitar os termos e a política de privacidade.', type='warning')
             return
         ui.notify('Cadastro criado com sucesso!', type='positive')
+        ui.navigate.to('/dashboard')
 
     with ui.element('main').classes('login-page'):
         brand_panel()
@@ -523,4 +526,4 @@ def registration_page() -> None:
                     ).props('flat dense no-caps').classes('signup-button')
 
 
-ui.run(title='EcoFlux | Login', port=8080, reload=False, show=False, favicon='🌿')
+ui.run(title='EcoFlux', port=8080, reload=False, show=False, favicon='🌿')
