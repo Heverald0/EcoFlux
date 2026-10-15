@@ -15,7 +15,7 @@ from ui_kit import (
     PRIMARY, bar_chart, card, chip_select, data_table, donut, donut_with_legend,
     dot_steps, form_field, grid, h, icon, item_list, kpi_row, layout, metric_list,
     eco_button, numbered_steps, page_header, progress_footer, rank_list,
-    stacked_metric_list, timeline,
+    route_map_html, stacked_metric_list, timeline,
 )
 
 
@@ -63,8 +63,7 @@ def pontos_de_coleta() -> None:
                       '<div class="muted" style="font-size:11px">34 pontos ativos na região</div>'
                       '<div style="font-size:11px">• Papel/Plástico • Eletrônico • Metal/Vidro</div>')
                     eco_button('Planejar rota',
-                               lambda: ui.notify('Rota planejada com 34 pontos ativos.',
-                                                 type='positive')
+                               lambda: ui.navigate.to('/rotas')
                                ).style('width:130px;margin-top:10px')
 
             with card('Cadastrar novo ponto'):
@@ -383,3 +382,100 @@ def administracao() -> None:
 
                 with card('Perfis de acesso', cls='card-sm'):
                     stacked_metric_list(m.PERFIS_ACESSO)
+
+def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) -> None:
+    """3 telas para rotas."""
+    with layout(rota_atual):
+        page_header(dados.page_title, dados.page_subtitle)
+
+        with grid('65'):
+            # Card da esquerda: Mapa da rota
+            with card():
+                with ui.element('div').classes('card-head'):
+                    h(f'<div>'
+                      f'<div class="card-title" style="font-size:16px;font-weight:600">'
+                      f'{escape(dados.nome_rota)}</div>'
+                      f'<div class="card-subtitle" style="font-size:11px;margin-top:4px">'
+                      f'{dados.paradas_total} paradas • {escape(dados.distancia)} • '
+                      f'duração estimada de {escape(dados.duracao)}</div>'
+                      f'</div>')
+                    eco_button(dados.btn_topo, acao_topo).style('min-width:155px;height:32px')
+
+                route_map_html()
+
+            # Card da direita: Resumo da rota
+            with card('Resumo da rota'):
+                h(f'''
+                <div>
+                  <div class="summary-item">
+                    <div class="summary-label">Distância total</div>
+                    <div class="summary-val">{escape(dados.distancia)}</div>
+                  </div>
+                  <div class="summary-item">
+                    <div class="summary-label">Tempo estimado</div>
+                    <div class="summary-val">{escape(dados.duracao)}</div>
+                  </div>
+                  <div class="summary-item">
+                    <div class="summary-label">Carga prevista</div>
+                    <div class="summary-val">{escape(dados.carga)}</div>
+                  </div>
+                  <div class="summary-item">
+                    <div class="summary-label">Emissão evitada</div>
+                    <div class="summary-val green">{escape(dados.co2)}</div>
+                  </div>
+                </div>
+                ''')
+
+                pct = int((dados.paradas_concluidas / dados.paradas_total) * 100)
+                h(f'''
+                <div style="margin: 14px 0 16px">
+                  <div style="font-size:11px;font-weight:500;margin-bottom:6px">Execução da rota</div>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="track" style="height:7px">
+                      <div class="fill" style="width:{pct}%"></div>
+                    </div>
+                    <span style="font-size:9px;color:{PRIMARY};font-weight:500;white-space:nowrap">
+                      {dados.paradas_concluidas} de {dados.paradas_total} paradas
+                    </span>
+                  </div>
+                </div>
+                ''')
+
+                eco_button(dados.btn_acao, acao_principal, cls='eco-block')
+
+        # Card inferior: Tabela de sequencia de paradas
+        with card('Sequência de paradas'):
+            data_table(dados.tabela_paradas)
+
+
+@ui.page('/rotas')
+def planejamento_rotas() -> None:
+    _tela_rota(
+        rota_atual='/rotas',
+        dados=m.ROTA_PLANEJAMENTO,
+        acao_topo=lambda: ui.navigate.to('/rotas/otimizada'),
+        acao_principal=lambda: ui.navigate.to('/rotas/em-andamento'),
+    )
+
+
+@ui.page('/rotas/otimizada')
+def rota_otimizada() -> None:
+    _tela_rota(
+        rota_atual='/rotas/otimizada',
+        dados=m.ROTA_OTIMIZADA,
+        acao_topo=lambda: ui.notify('Rota recalculada com os parâmetros mais recentes!', type='positive'),
+        acao_principal=lambda: ui.navigate.to('/rotas/em-andamento'),
+    )
+
+
+@ui.page('/rotas/em-andamento')
+def coleta_em_andamento() -> None:
+    _tela_rota(
+        rota_atual='/rotas/em-andamento',
+        dados=m.ROTA_ANDAMENTO,
+        acao_topo=lambda: ui.notify('Rota recalculada com sucesso!', type='positive'),
+        acao_principal=lambda: (
+            ui.notify('Rota pausada.', type='warning'),
+            ui.navigate.to('/rotas/otimizada'),
+        ),
+    )

@@ -28,6 +28,9 @@ TITLES = {
     '/relatorios': 'Relatórios',
     '/area-educativa': 'Área Educativa',
     '/administracao': 'Administração',
+    '/rotas': 'Rotas',
+    '/rotas/otimizada': 'Rotas',
+    '/rotas/em-andamento': 'Rotas',
 }
 
 NAV = [
@@ -52,10 +55,12 @@ NAV = [
 
 TONES = {
     'agendada': 'green', 'ativo': 'green', 'enviado': 'green', 'ouro': 'green',
+    'concluída': 'green', 'concluida': 'green',
     'realizada': 'solid', 'realizado': 'solid', 'comercializado': 'solid',
     'em análise': 'amber', 'análise': 'amber', 'analise': 'amber', 'analisar': 'amber',
     'triagem': 'amber', 'manutenção': 'amber', 'pendente': 'amber', 'bronze': 'amber',
     'enviada': 'blue', 'coletado': 'blue', 'pronto': 'blue', 'prata': 'blue',
+    'em rota': 'blue',
     'cancelada': 'red', 'bloqueado': 'red',
     'inicial': 'gray',
 }
@@ -495,6 +500,34 @@ STYLES = '''
     .score-badge { display: none; }
     .form-grid.cols-2, .form-grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
   }
+  .route-map {
+    position: relative;
+    width: 100%;
+    height: 220px;
+    border: 1px solid #DCE0E4;
+    border-radius: 12px;
+    background: #F4F6F8;
+    overflow: hidden;
+  }
+  .summary-item {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .summary-item:last-of-type {
+    border-bottom: none;
+  }
+  .summary-label {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .summary-val {
+    margin-top: 2px;
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .summary-val.green {
+    color: var(--primary);
+  }
 </style>
 <script>
   function ecoToast(message) {
@@ -823,3 +856,49 @@ def chip_select(options: list[str], selected: Iterable[str]) -> set[str]:
             ).classes(f'chip{" on" if on else ""}')
             button.on_click(lambda o=option, b=button: toggle(o, b))
     return chosen
+
+def route_map_html() -> None:
+    h('''
+    <div class="route-map">
+      <svg viewBox="0 0 600 260" style="width:100%;height:100%;display:block">
+        <!-- Linhas horizontais de grade -->
+        <line x1="20" y1="35" x2="580" y2="35" stroke="#E5E7EB" stroke-width="1"/>
+        <line x1="20" y1="75" x2="580" y2="75" stroke="#E5E7EB" stroke-width="1"/>
+        <line x1="20" y1="115" x2="580" y2="115" stroke="#E5E7EB" stroke-width="1"/>
+        <line x1="20" y1="155" x2="580" y2="155" stroke="#E5E7EB" stroke-width="1"/>
+        <line x1="20" y1="195" x2="580" y2="195" stroke="#E5E7EB" stroke-width="1"/>
+        <line x1="20" y1="230" x2="580" y2="230" stroke="#E5E7EB" stroke-width="1"/>
+
+        <!-- Caminho da rota -->
+        <polyline points="55,210 135,165 225,115 320,90 420,45 540,25"
+                  fill="none" stroke="#1F8A43" stroke-width="4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+
+        <!-- Ponto 1 (Verde claro - Inicio) -->
+        <circle cx="55" cy="210" r="10" fill="#4ADE80" stroke="#fff" stroke-width="2"/>
+        <text x="55" y="214" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">1</text>
+        <text x="65" y="236" text-anchor="middle" fill="#1F8A43" font-size="9" font-weight="500">Coop. Recicla BA</text>
+
+        <!-- Ponto 2 -->
+        <circle cx="135" cy="165" r="10" fill="#1F8A43" stroke="#fff" stroke-width="2"/>
+        <text x="135" y="169" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">2</text>
+
+        <!-- Ponto 3 -->
+        <circle cx="225" cy="115" r="10" fill="#1F8A43" stroke="#fff" stroke-width="2"/>
+        <text x="225" y="119" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">3</text>
+
+        <!-- Ponto 4 -->
+        <circle cx="320" cy="90" r="10" fill="#1F8A43" stroke="#fff" stroke-width="2"/>
+        <text x="320" y="94" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">4</text>
+
+        <!-- Ponto 5 -->
+        <circle cx="420" cy="45" r="10" fill="#1F8A43" stroke="#fff" stroke-width="2"/>
+        <text x="420" y="49" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">5</text>
+
+        <!-- Ponto 6 (Fim) -->
+        <circle cx="540" cy="25" r="10" fill="#1F8A43" stroke="#fff" stroke-width="2"/>
+        <text x="540" y="29" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">6</text>
+        <text x="535" y="52" text-anchor="middle" fill="#1F8A43" font-size="9" font-weight="500">Ecoponto Central</text>
+      </svg>
+    </div>
+    ''')

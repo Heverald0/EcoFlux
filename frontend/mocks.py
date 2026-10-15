@@ -380,3 +380,81 @@ PERFIS_ACESSO = [
     Metric('Coletor', 'rotas e registros', 50),
     Metric('Visitante', 'educação e score', 35),
 ]
+@dataclass(frozen=True)
+class RotaView:
+    page_title: str
+    page_subtitle: str
+    nome_rota: str
+    paradas_total: int
+    paradas_concluidas: int
+    distancia: str
+    duracao: str
+    carga: str
+    co2: str
+    btn_topo: str
+    btn_acao: str
+    tabela_paradas: Table
+
+
+ROTA_PLANEJAMENTO = RotaView(
+    page_title='Planejamento de rotas',
+    page_subtitle='Organize pontos, reduza deslocamentos e acompanhe a execução das coletas',
+    nome_rota='Rota Eunápolis Centro • 12 de junho',
+    paradas_total=6,
+    paradas_concluidas=2,
+    distancia='28,4 km',
+    duracao='1h45',
+    carga='680 kg',
+    co2='42 kg CO₂',
+    btn_topo='Otimizar rota',
+    btn_acao='Iniciar rota',
+    tabela_paradas=Table(
+        ['Ordem', 'Ponto de coleta', 'Material', 'Volume', 'Status', 'Previsão'],
+        [
+            ['1', 'Coop. Recicla BA', 'Papel e plástico', '180 kg', Badge('Concluída'), '08:00'],
+            ['2', 'Cond. Parque Verde', 'Papel', '120 kg', Badge('Concluída'), '08:25'],
+            ['3', 'Escola Araucária', 'Plástico e metal', '95 kg', Badge('Em rota'), '08:50'],
+            ['4', 'TechCorp LTDA', 'Eletrônicos', '140 kg', Badge('Pendente'), '09:20'],
+            ['5', 'UFSB', 'Vidro', '85 kg', Badge('Pendente'), '09:45'],
+        ],
+    ),
+)
+
+ROTA_OTIMIZADA = RotaView(
+    page_title='Rota otimizada',
+    page_subtitle='Sequência recalculada para reduzir distância, tempo e emissão de CO₂',
+    nome_rota='Rota Eunápolis Centro • 12 de junho',
+    paradas_total=6,
+    paradas_concluidas=2,
+    distancia='24,1 km',
+    duracao='1h32',
+    carga='680 kg',
+    co2='48 kg CO₂',
+    btn_topo='Recalcular rota',
+    btn_acao='Iniciar rota',
+    tabela_paradas=ROTA_PLANEJAMENTO.tabela_paradas,
+)
+
+ROTA_ANDAMENTO = RotaView(
+    page_title='Coleta em andamento',
+    page_subtitle='Acompanhe o avanço da equipe e o status de cada ponto de coleta',
+    nome_rota='Rota Eunápolis Centro • 12 de junho',
+    paradas_total=6,
+    paradas_concluidas=3,
+    distancia='24,1 km',
+    duracao='1h32',
+    carga='680 kg',
+    co2='48 kg CO₂',
+    btn_topo='Recalcular rota',
+    btn_acao='Pausar rota',
+    tabela_paradas=Table(
+        ['Ordem', 'Ponto de coleta', 'Material', 'Volume', 'Status', 'Previsão'],
+        [
+            ['1', 'Coop. Recicla BA', 'Papel e plástico', '180 kg', Badge('Concluída'), '08:00'],
+            ['2', 'Cond. Parque Verde', 'Papel', '120 kg', Badge('Concluída'), '08:25'],
+            ['3', 'Escola Araucária', 'Plástico e metal', '95 kg', Badge('Concluída'), '08:50'],
+            ['4', 'TechCorp LTDA', 'Eletrônicos', '140 kg', Badge('Pendente'), '09:20'],
+            ['5', 'UFSB', 'Vidro', '85 kg', Badge('Pendente'), '09:45'],
+        ],
+    ),
+)
