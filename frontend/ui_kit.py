@@ -611,7 +611,7 @@ def layout(route: str):
                     ):
                         h(icon('eco'))
                         with ui.menu():
-                            ui.menu_item('Perfil', lambda: ui.notify('Perfil em breve.'))
+                            ui.menu_item('Perfil', lambda: ui.navigate.to('/dashboard'))
                             ui.menu_item('Administração',
                                          lambda: ui.navigate.to('/administracao'))
                             ui.separator()

@@ -170,6 +170,14 @@ ui.add_head_html('''
     line-height: 1.4;
   }
 
+  .password-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .password-header .field-label { margin-bottom: 0; }
+
   .eco-input { width: 100%; margin: 0; }
   .eco-input .q-field__control,
   .eco-input .q-field__native {
@@ -379,7 +387,13 @@ def login_page() -> None:
                         ).classes('eco-input')
 
                     with ui.element('div').classes('field-group password-group'):
-                        field_label('Senha', required=False)
+                        with ui.element('div').classes('password-header'):
+                            field_label('Senha', required=False)
+                            ui.button(
+                                'Esqueceu a senha?',
+                                on_click=lambda: ui.navigate.to('/recuperar-senha'),
+                            ).props('flat dense no-caps').classes('signup-button')
+
                         password = ui.input(
                             placeholder='Digite sua senha',
                             password=True,
@@ -522,6 +536,62 @@ def registration_page() -> None:
                     ui.label('Já tem uma conta?')
                     ui.button(
                         'Entrar',
+                        on_click=lambda: ui.navigate.to('/'),
+                    ).props('flat dense no-caps').classes('signup-button')
+
+@ui.page('/recuperar-senha')
+def recovery_page() -> None:
+    ui.colors(primary='#15703c')
+    ui.page_title('EcoFlux | Recuperar conta')
+
+    def request_recovery() -> None:
+        if not email.value or '@' not in email.value:
+            ui.notify('Informe um e-mail válido para recuperação.', type='warning')
+            return
+        if not document.value:
+            ui.notify('Informe o CPF ou CNPJ vinculado à conta.', type='warning')
+            return
+        ui.notify(
+            f'Instruções de recuperação enviadas para {email.value}!',
+            type='positive',
+        )
+        ui.navigate.to('/')
+
+    with ui.element('main').classes('login-page'):
+        brand_panel()
+
+        with ui.element('section').classes('form-panel'):
+            with ui.element('div').classes('form-wrap'):
+                with ui.element('div').classes('login-card'):
+                    ui.html('<h2 class="form-title">Recuperar conta</h2>', sanitize=False)
+                    ui.html(
+                        '<div class="form-subtitle">'
+                        'Informe seus dados para receber o link de redefinição de senha'
+                        '</div>',
+                        sanitize=False,
+                    )
+
+                    with ui.element('div').classes('field-group'):
+                        field_label('E-mail cadastrado')
+                        email = ui.input(placeholder='usuario@instituicao.com').props(
+                            'outlined hide-bottom-space type=email autocomplete=email aria-label="E-mail"'
+                        ).classes('eco-input')
+
+                    with ui.element('div').classes('field-group password-group'):
+                        field_label('CNPJ/CPF vinculado')
+                        document = ui.input(placeholder='00.000.000/0001-00').props(
+                            'outlined hide-bottom-space inputmode=numeric aria-label="CNPJ ou CPF"'
+                        ).classes('eco-input')
+                        document.on('keydown.enter', request_recovery)
+
+                    ui.button('Enviar instruções', on_click=request_recovery).props(
+                        'unelevated no-caps'
+                    ).classes('login-button')
+
+                with ui.element('div').classes('signup-copy'):
+                    ui.label('Lembrou a senha?')
+                    ui.button(
+                        'Voltar para o login',
                         on_click=lambda: ui.navigate.to('/'),
                     ).props('flat dense no-caps').classes('signup-button')
 
