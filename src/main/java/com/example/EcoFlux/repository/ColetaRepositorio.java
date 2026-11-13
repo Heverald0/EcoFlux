@@ -12,6 +12,7 @@ import java.util.Optional;
 @Repository
 public interface ColetaRepositorio extends JpaRepository<Coleta, Long> {
     List<Coleta> findAllByUsuarioSolicitanteOrderByDataHoraAgendamentoDesc(Usuario usuarioSolicitante);
+    List<Coleta> findAllByUsuarioSolicitanteAndStatusOrderByDataHoraAgendamentoDesc(Usuario usuarioSolicitante, StatusColeta status);
     List<Coleta> findAllByStatusOrderByDataHoraAgendamentoAsc(StatusColeta status);
     Optional<Coleta> findByIdAndUsuarioSolicitante(Long id, Usuario usuarioSolicitante);
 }

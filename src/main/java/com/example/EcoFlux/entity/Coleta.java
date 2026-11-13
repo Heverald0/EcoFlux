@@ -27,6 +27,9 @@ public class Coleta {
     @Column(name = "data_hora_agendamento", nullable = false)
     private LocalDateTime dataHoraAgendamento;
 
+    @Column(name = "janela_horario", length = 50)
+    private String janelaHorario;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "tipo_material", nullable = false, length = 50)
     private TipoMaterial tipoMaterial;
@@ -66,6 +69,10 @@ public class Coleta {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "instituicao_id")
     private Instituicao instituicao;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cooperativa_id")
+    private Instituicao cooperativa;
 
     @CreationTimestamp
     @Column(name = "data_criacao", nullable = false, updatable = false)
