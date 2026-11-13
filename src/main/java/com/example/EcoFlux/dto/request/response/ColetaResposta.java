@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 public record ColetaResposta(
         Long id,
         LocalDateTime dataHoraAgendamento,
+        String janelaHorario,
         TipoMaterial tipoMaterial,
         BigDecimal quantidadeEstimadaKg,
         String observacoes,
@@ -24,12 +25,15 @@ public record ColetaResposta(
         String nomeSolicitante,
         Long idInstituicao,
         String nomeInstituicao,
+        Long idCooperativa,
+        String nomeCooperativa,
         LocalDateTime dataCriacao
 ) {
     public static ColetaResposta converter(Coleta coleta) {
         return new ColetaResposta(
                 coleta.getId(),
                 coleta.getDataHoraAgendamento(),
+                coleta.getJanelaHorario(),
                 coleta.getTipoMaterial(),
                 coleta.getQuantidadeEstimadaKg(),
                 coleta.getObservacoes(),
@@ -44,6 +48,8 @@ public record ColetaResposta(
                 coleta.getUsuarioSolicitante().getNome(),
                 coleta.getInstituicao() != null ? coleta.getInstituicao().getId() : null,
                 coleta.getInstituicao() != null ? coleta.getInstituicao().getNome() : null,
+                coleta.getCooperativa() != null ? coleta.getCooperativa().getId() : null,
+                coleta.getCooperativa() != null ? coleta.getCooperativa().getNome() : null,
                 coleta.getDataCriacao()
         );
     }

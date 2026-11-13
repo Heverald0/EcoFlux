@@ -11,6 +11,9 @@ public record ColetaAgendamentoRequisicao(
         @Future(message = "A data e horario do agendamento devem estar no futuro.")
         LocalDateTime dataHoraAgendamento,
 
+        @Size(max = 50, message = "A janela de horario deve ter no maximo 50 caracteres.")
+        String janelaHorario,
+
         @NotNull(message = "O tipo do material e obrigatorio.")
         TipoMaterial tipoMaterial,
 
@@ -40,5 +43,7 @@ public record ColetaAgendamentoRequisicao(
         @NotBlank(message = "O CEP e obrigatorio.")
         String cep,
 
-        Long instituicaoId
+        Long instituicaoId,
+
+        Long cooperativaId
 ) {}
