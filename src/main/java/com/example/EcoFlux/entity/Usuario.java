@@ -1,6 +1,8 @@
 package com.example.EcoFlux.entity;
 
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
+import com.example.EcoFlux.entity.enums.StatusUsuario;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -34,11 +36,23 @@ public class Usuario implements UserDetails {
     private String email;
 
     @Column(name = "senha_hash", nullable = false)
+    @JsonIgnore
     private String senha;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     private PerfilUsuario perfil;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private StatusUsuario status = StatusUsuario.ATIVO;
+
+    @Column(name = "versao_token", nullable = false)
+    @JsonIgnore
+    @Builder.Default
+    private long versaoToken = 0;
+
 
     @CreationTimestamp
     @Column(name = "data_criacao", nullable = false, updatable = false)
@@ -50,20 +64,11 @@ public class Usuario implements UserDetails {
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        if (this.perfil == PerfilUsuario.ADMINISTRADOR) {
-            return List.of(
-                    new SimpleGrantedAuthority("ROLE_ADMINISTRADOR"),
-                    new SimpleGrantedAuthority("ROLE_USUARIO"),
-                    new SimpleGrantedAuthority("ROLE_INSTITUICAO")
-            );
-        }
-        if (this.perfil == PerfilUsuario.INSTITUICAO) {
-            return List.of(new SimpleGrantedAuthority("ROLE_INSTITUICAO"));
-        }
-        return List.of(new SimpleGrantedAuthority("ROLE_USUARIO"));
+        return List.of(new SimpleGrantedAuthority("ROLE_" + perfil.name()));
     }
 
     @Override
+    @JsonIgnore
     public String getPassword() {
         return this.senha;
     }
@@ -80,7 +85,7 @@ public class Usuario implements UserDetails {
 
     @Override
     public boolean isAccountNonLocked() {
-        return true;
+        return status != StatusUsuario.BLOQUEADO;
     }
 
     @Override
@@ -90,6 +95,6 @@ public class Usuario implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return true;
+        return status == StatusUsuario.ATIVO;
     }
 }
