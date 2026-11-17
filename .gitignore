@@ -69,3 +69,6 @@ Desktop.ini
 
 ### Documentação Automática & Auxiliares ###
 HELP.md
+data/
+output/
+tmp/
