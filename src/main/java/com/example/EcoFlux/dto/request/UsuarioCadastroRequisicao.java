@@ -15,6 +15,6 @@ public record UsuarioCadastroRequisicao(
         String email,
 
         @NotBlank(message = "A senha é obrigatória.")
-        @Size(min = 8, message = "A senha deve conter no mínimo 8 caracteres.")
+        @Size(min = 8, max = 72, message = "A senha deve conter entre 8 e 72 caracteres.")
         String senha
 ) {}
