@@ -15,7 +15,9 @@ import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
 import com.example.EcoFlux.repository.PontoColetaRepositorio;
 import com.example.EcoFlux.service.PontoColetaServico;
+import com.example.EcoFlux.service.EventoServico;
 import org.springframework.security.access.AccessDeniedException;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
 
     private final PontoColetaRepositorio pontoColetaRepositorio;
     private final InstituicaoRepositorio instituicaoRepositorio;
+    private final EventoServico eventos;
 
     @Override
     @Transactional
@@ -65,6 +68,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
                 .build();
 
         PontoColeta salvo = pontoColetaRepositorio.save(novoPonto);
+        registrar(salvo, usuarioAutenticado, "PONTO_CADASTRADO", "Ponto de coleta cadastrado.");
         return PontoColetaResposta.converter(salvo);
     }
 
@@ -95,6 +99,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
         ponto.setInstituicao(instituicao);
 
         PontoColeta salvo = pontoColetaRepositorio.save(ponto);
+        registrar(salvo, usuarioAutenticado, "PONTO_ATUALIZADO", "Dados do ponto de coleta atualizados.");
         return PontoColetaResposta.converter(salvo);
     }
 
@@ -115,6 +120,8 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
                 : null);
 
         PontoColeta salvo = pontoColetaRepositorio.save(ponto);
+        registrar(salvo, usuarioAutenticado, "PONTO_STATUS_ALTERADO", "Status: " + ponto.getStatus()
+                + (ponto.getMotivoStatus() == null ? "" : ". " + ponto.getMotivoStatus()));
         return PontoColetaResposta.converter(salvo);
     }
 
@@ -174,4 +181,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
         return instituicao;
     }
 
+    private void registrar(PontoColeta ponto, Usuario autor, String tipo, String mensagem) {
+        eventos.registrar(UUID.randomUUID().toString(), tipo, "PONTO_COLETA", ponto.getId(), autor, null, ponto.getInstituicao(), mensagem);
+    }
 }
