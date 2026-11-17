@@ -141,6 +141,13 @@ public class ColetaServicoImpl implements ColetaServico {
         }
         if ((novo == StatusColeta.AGENDADA || novo == StatusColeta.EM_ROTA || novo == StatusColeta.EM_ANDAMENTO) && coleta.getCooperativa() == null)
             throw new ExcecaoConflitoNegocio("Vincule uma cooperativa antes de agendar a coleta.");
+        if (novo == StatusColeta.REALIZADA || novo == StatusColeta.CONCLUIDA) {
+            if (requisicao.quantidadeReal() == null || requisicao.quantidadeReal().signum() <= 0
+                    || requisicao.quantidadeReal().scale() > 2 || requisicao.quantidadeReal().precision() > 12)
+                throw new ExcecaoRegraNegocio("Informe a quantidade realmente coletada, positiva, com ate duas casas decimais.");
+            coleta.setQuantidadeReal(requisicao.quantidadeReal());
+            coleta.setDataConclusao(LocalDateTime.now());
+        }
         coleta.setStatus(novo);
         registrarEventoTimeline(coleta, atual, novo, requisicao.observacao() == null || requisicao.observacao().isBlank()
                 ? "Status atualizado de " + atual + " para " + novo + "." : requisicao.observacao().trim(), usuario);
