@@ -53,6 +53,9 @@ public class RegistroMaterial {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "autor_id", nullable = false, unique = false)
     private Usuario autor;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "fator_impacto_id", nullable = true, unique = false)
+    private FatorImpacto fatorImpacto;
     @Version
     private Long versao;
     @CreationTimestamp

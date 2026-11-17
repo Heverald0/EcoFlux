@@ -24,6 +24,7 @@ import java.util.List;
 public class MaterialServico {
     private final RegistroMaterialRepositorio materiais;
     private final ColetaRepositorio coletas;
+    private final FatorImpactoRepositorio fatores;
     private final EscopoAmbiental escopo;
     private final EcoScoreServico score;
     private final EventoServico eventos;
@@ -71,7 +72,7 @@ public class MaterialServico {
                 .destino(coleta.getCooperativa() == null ? "Recebimento EcoFlux" : coleta.getCooperativa().getNome())
                 .status(StatusMaterial.COLETADO).dataRegistro(conclusao.toLocalDate()).dataEfetivacao(conclusao)
                 .instituicao(coleta.getInstituicao()).usuario(coleta.getUsuarioSolicitante()).autor(autor).build();
-
+        definirFator(material);
         materiais.save(material);
         score.creditar(material, autor);
         registrarEvento(material, autor);
@@ -88,7 +89,7 @@ public class MaterialServico {
         material.setStatus(status);
         if (status == StatusMaterial.COLETADO) {
             material.setDataEfetivacao(LocalDateTime.now());
-
+            definirFator(material);
             score.creditar(material, usuario);
         }
         registrarEvento(material, usuario);
@@ -140,6 +141,10 @@ public class MaterialServico {
             throw new AccessDeniedException("Somente a cooperativa responsavel pode registrar o recebimento.");
     }
 
+    private void definirFator(RegistroMaterial material) {
+        material.setFatorImpacto(fatores.findFirstByMaterialAndUnidadeAndVigenciaLessThanEqualOrderByVigenciaDescIdDesc(
+                material.getTipoMaterial(), material.getUnidade(), material.getDataRegistro()).orElse(null));
+    }
 
     private void registrarEvento(RegistroMaterial material, Usuario autor) {
         eventos.registrar("material:" + material.getId() + ":" + material.getStatus(), "MATERIAL_STATUS", "material",
