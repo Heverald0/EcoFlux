@@ -2,6 +2,7 @@ package com.example.EcoFlux.controller;
 
 import com.example.EcoFlux.configuracao.ServicoToken;
 import com.example.EcoFlux.dto.request.LoginRequisicao;
+import java.util.Locale;
 import com.example.EcoFlux.dto.request.response.TokenResposta;
 import com.example.EcoFlux.entity.Usuario;
 import jakarta.validation.Valid;
@@ -26,7 +27,7 @@ public class AutenticacaoControlador {
     @PostMapping("/login")
     public ResponseEntity<TokenResposta> autenticar(@RequestBody @Valid LoginRequisicao requisicao) {
         var dadosAutenticacao = new UsernamePasswordAuthenticationToken(
-                requisicao.email().trim().toLowerCase(),
+                requisicao.email().trim().toLowerCase(Locale.ROOT),
                 requisicao.senha()
         );
 
