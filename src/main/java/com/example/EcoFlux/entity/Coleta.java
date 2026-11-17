@@ -2,6 +2,7 @@ package com.example.EcoFlux.entity;
 
 import com.example.EcoFlux.entity.enums.StatusColeta;
 import com.example.EcoFlux.entity.enums.TipoMaterial;
+import com.example.EcoFlux.entity.enums.UnidadeMaterial;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -36,6 +37,24 @@ public class Coleta {
 
     @Column(name = "quantidade_estimada_kg", nullable = false, precision = 10, scale = 2)
     private BigDecimal quantidadeEstimadaKg;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    @Builder.Default
+    private UnidadeMaterial unidade = UnidadeMaterial.KG;
+
+    @Column(name = "quantidade_real", precision = 12, scale = 2)
+    private BigDecimal quantidadeReal;
+
+    @Column(name = "data_conclusao")
+    private LocalDateTime dataConclusao;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "ponto_coleta_id")
+    private PontoColeta pontoColeta;
+
+    @Version
+    private long versao;
 
     @Column(length = 255)
     private String observacoes;

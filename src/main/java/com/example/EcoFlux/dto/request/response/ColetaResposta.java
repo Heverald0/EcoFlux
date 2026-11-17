@@ -3,6 +3,7 @@ package com.example.EcoFlux.dto.request.response;
 import com.example.EcoFlux.entity.Coleta;
 import com.example.EcoFlux.entity.enums.StatusColeta;
 import com.example.EcoFlux.entity.enums.TipoMaterial;
+import com.example.EcoFlux.entity.enums.UnidadeMaterial;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,7 +28,11 @@ public record ColetaResposta(
         String nomeInstituicao,
         Long idCooperativa,
         String nomeCooperativa,
-        LocalDateTime dataCriacao
+        LocalDateTime dataCriacao,
+        Long pontoColetaId,
+        UnidadeMaterial unidade,
+        BigDecimal quantidadeReal,
+        LocalDateTime dataConclusao
 ) {
     public static ColetaResposta converter(Coleta coleta) {
         return new ColetaResposta(
@@ -50,7 +55,11 @@ public record ColetaResposta(
                 coleta.getInstituicao() != null ? coleta.getInstituicao().getNome() : null,
                 coleta.getCooperativa() != null ? coleta.getCooperativa().getId() : null,
                 coleta.getCooperativa() != null ? coleta.getCooperativa().getNome() : null,
-                coleta.getDataCriacao()
+                coleta.getDataCriacao(),
+                coleta.getPontoColeta() != null ? coleta.getPontoColeta().getId() : null,
+                coleta.getUnidade(),
+                coleta.getQuantidadeReal(),
+                coleta.getDataConclusao()
         );
     }
 }

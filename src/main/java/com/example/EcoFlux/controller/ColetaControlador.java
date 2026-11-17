@@ -85,4 +85,10 @@ public class ColetaControlador {
         List<EventoTimelineColetaResposta> timeline = coletaServico.consultarTimeline(id, usuarioAutenticado);
         return ResponseEntity.ok(timeline);
     }
+
+    @PutMapping("/{id}")
+    public ColetaResposta editar(@PathVariable Long id, @RequestBody @Valid ColetaAgendamentoRequisicao requisicao,
+                                 @AuthenticationPrincipal Usuario usuario) {
+        return coletaServico.editar(id, requisicao, usuario);
+    }
 }

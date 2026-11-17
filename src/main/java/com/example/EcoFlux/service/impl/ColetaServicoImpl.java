@@ -1,29 +1,21 @@
 package com.example.EcoFlux.service.impl;
 
-import com.example.EcoFlux.dto.request.AtualizarStatusColetaRequisicao;
-import com.example.EcoFlux.dto.request.ColetaAgendamentoRequisicao;
-import com.example.EcoFlux.dto.request.response.ColetaResposta;
-import com.example.EcoFlux.dto.request.response.EventoTimelineColetaResposta;
-import com.example.EcoFlux.entity.Coleta;
-import com.example.EcoFlux.entity.HistoricoStatusColeta;
-import com.example.EcoFlux.entity.Instituicao;
-import com.example.EcoFlux.entity.Usuario;
-import com.example.EcoFlux.entity.enums.PerfilUsuario;
-import com.example.EcoFlux.entity.enums.StatusColeta;
-import com.example.EcoFlux.entity.enums.TipoInstituicao;
-import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
-import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
-import com.example.EcoFlux.repository.ColetaRepositorio;
-import com.example.EcoFlux.repository.HistoricoStatusColetaRepositorio;
-import com.example.EcoFlux.repository.InstituicaoRepositorio;
-import com.example.EcoFlux.service.ColetaServico;
+import com.example.EcoFlux.dto.request.*;
+import com.example.EcoFlux.dto.request.response.*;
+import com.example.EcoFlux.entity.*;
+import com.example.EcoFlux.entity.enums.*;
+import com.example.EcoFlux.exception.*;
+import com.example.EcoFlux.repository.*;
+import com.example.EcoFlux.service.*;
+import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.*;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Locale;
+import java.time.*;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -32,55 +24,19 @@ public class ColetaServicoImpl implements ColetaServico {
     private final ColetaRepositorio coletaRepositorio;
     private final InstituicaoRepositorio instituicaoRepositorio;
     private final HistoricoStatusColetaRepositorio historicoRepositorio;
+    private final PontoColetaRepositorio pontoRepositorio;
+    private final EventoServico eventos;
 
     @Override
     @Transactional
-    public ColetaResposta agendar(ColetaAgendamentoRequisicao requisicao, Usuario usuarioSolicitante) {
-        if (requisicao.dataHoraAgendamento().isBefore(LocalDateTime.now().plusHours(1))) {
-            throw new ExcecaoConflitoNegocio("O agendamento deve ser realizado com no minimo 1 hora de antecedencia.");
-        }
-
-        Instituicao instituicao = null;
-        if (requisicao.instituicaoId() != null) {
-            instituicao = instituicaoRepositorio.findById(requisicao.instituicaoId())
-                    .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(
-                            String.format("Instituicao com ID %d nao encontrada.", requisicao.instituicaoId())
-                    ));
-
-            if (!instituicao.getUsuarioResponsavel().getId().equals(usuarioSolicitante.getId())
-                    && usuarioSolicitante.getPerfil() != PerfilUsuario.ADMINISTRADOR) {
-                throw new ExcecaoConflitoNegocio("Apenas o responsavel pela instituicao pode agendar coletas em seu nome.");
-            }
-        }
-
-        Instituicao cooperativa = validarCooperativa(requisicao.cooperativaId());
-
-        Coleta novaColeta = Coleta.builder()
-                .dataHoraAgendamento(requisicao.dataHoraAgendamento())
-                .janelaHorario(requisicao.janelaHorario() != null && !requisicao.janelaHorario().isBlank()
-                        ? requisicao.janelaHorario().trim()
-                        : "COMERCIAL (08:00 - 18:00)")
-                .tipoMaterial(requisicao.tipoMaterial())
-                .quantidadeEstimadaKg(requisicao.quantidadeEstimadaKg())
-                .observacoes(requisicao.observacoes() != null ? requisicao.observacoes().trim() : null)
-                .logradouro(requisicao.logradouro().trim())
-                .numero(requisicao.numero().trim())
-                .bairro(requisicao.bairro().trim())
-                .cidade(requisicao.cidade().trim())
-                .estado(requisicao.estado().trim().toUpperCase(Locale.ROOT))
-                .cep(requisicao.cep().replace("-", ""))
-                .status(StatusColeta.ENVIADA) // COL-03: Estado inicial ENVIADA
-                .usuarioSolicitante(usuarioSolicitante)
-                .instituicao(instituicao)
-                .cooperativa(cooperativa)
-                .build();
-
-        Coleta coletaSalva = coletaRepositorio.save(novaColeta);
-
-        registrarEventoTimeline(coletaSalva, null, StatusColeta.ENVIADA,
-                "Solicitacao de coleta criada e enviada para analise.", usuarioSolicitante);
-
-        return ColetaResposta.converter(coletaSalva);
+    public ColetaResposta agendar(ColetaAgendamentoRequisicao requisicao, Usuario usuario) {
+        Coleta coleta = new Coleta();
+        coleta.setUsuarioSolicitante(usuario);
+        preencher(coleta, requisicao, usuario);
+        coleta.setStatus(StatusColeta.ENVIADA);
+        coletaRepositorio.saveAndFlush(coleta);
+        registrarEventoTimeline(coleta, null, StatusColeta.ENVIADA, "Solicitacao de coleta enviada para analise.", usuario);
+        return ColetaResposta.converter(coleta);
     }
 
     @Override
@@ -193,18 +149,11 @@ public class ColetaServicoImpl implements ColetaServico {
         return coleta;
     }
 
-    private Instituicao validarCooperativa(Long cooperativaId) {
-        if (cooperativaId == null) {
-            return null;
-        }
-        Instituicao cooperativa = instituicaoRepositorio.findById(cooperativaId)
-                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(
-                        String.format("Cooperativa com ID %d nao encontrada.", cooperativaId)
-                ));
-
-        if (cooperativa.getTipo() != TipoInstituicao.COOPERATIVA) {
-            throw new ExcecaoConflitoNegocio("A instituicao informada como coletora deve ser do tipo COOPERATIVA.");
-        }
+    private Instituicao validarCooperativa(Long id) {
+        if (id == null) return null;
+        Instituicao cooperativa = instituicaoRepositorio.findById(id).orElseThrow(() -> new ExcecaoRecursoNaoEncontrado("Cooperativa nao encontrada."));
+        if (cooperativa.getTipo() != TipoInstituicao.COOPERATIVA) throw new ExcecaoRegraNegocio("A instituicao coletora deve ser uma cooperativa.");
+        validarAtiva(cooperativa);
         return cooperativa;
     }
 
@@ -218,5 +167,64 @@ public class ColetaServicoImpl implements ColetaServico {
                 .usuarioAutor(autor)
                 .build();
         historicoRepositorio.save(evento);
+    }
+
+    @Override
+    @Transactional
+    public ColetaResposta editar(Long id, ColetaAgendamentoRequisicao requisicao, Usuario usuario) {
+        Coleta coleta = obterBloqueada(id);
+        if (!administrador(usuario) && !coleta.getUsuarioSolicitante().getId().equals(usuario.getId()))
+            throw new AccessDeniedException("Apenas o solicitante pode editar a coleta.");
+        if (coleta.getStatus() != StatusColeta.ENVIADA && coleta.getStatus() != StatusColeta.EM_ANALISE)
+            throw new ExcecaoConflitoNegocio("A coleta so pode ser editada antes do agendamento.");
+        preencher(coleta, requisicao, usuario);
+        eventos.registrar(UUID.randomUUID().toString(), "COLETA_EDITADA", "COLETA", id, usuario,
+                coleta.getUsuarioSolicitante(), coleta.getInstituicao(), "Solicitacao de coleta atualizada.");
+        return ColetaResposta.converter(coleta);
+    }
+
+    private void preencher(Coleta coleta, ColetaAgendamentoRequisicao r, Usuario usuario) {
+        if (r.dataHoraAgendamento().isBefore(LocalDateTime.now().plusHours(1)))
+            throw new ExcecaoConflitoNegocio("O agendamento deve ter pelo menos uma hora de antecedencia.");
+        Instituicao instituicao = r.instituicaoId() == null ? null : instituicaoRepositorio.findById(r.instituicaoId())
+                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado("Instituicao nao encontrada."));
+        if (instituicao != null) {
+            if (!administrador(usuario) && !instituicao.getUsuarioResponsavel().getId().equals(usuario.getId()))
+                throw new AccessDeniedException("Instituicao pertence a outro responsavel.");
+            validarAtiva(instituicao);
+        }
+        UnidadeMaterial unidade = r.unidade() == null ? UnidadeMaterial.KG : r.unidade();
+        if (unidade == UnidadeMaterial.L && r.tipoMaterial() != TipoMaterial.OLEO)
+            throw new ExcecaoRegraNegocio("A unidade L so e aceita para oleo.");
+        PontoColeta ponto = r.pontoColetaId() == null ? null : pontoRepositorio.findById(r.pontoColetaId())
+                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado("Ponto de coleta nao encontrado."));
+        if (ponto != null && (ponto.getStatus() != StatusPontoColeta.ATIVO || !ponto.getMateriaisAceitos().contains(r.tipoMaterial())))
+            throw new ExcecaoConflitoNegocio("Ponto indisponivel para o material informado.");
+        coleta.setDataHoraAgendamento(r.dataHoraAgendamento());
+        coleta.setJanelaHorario(r.janelaHorario() == null || r.janelaHorario().isBlank() ? "COMERCIAL (08:00 - 18:00)" : r.janelaHorario().trim());
+        coleta.setTipoMaterial(r.tipoMaterial());
+        coleta.setQuantidadeEstimadaKg(r.quantidadeEstimadaKg());
+        coleta.setUnidade(unidade);
+        coleta.setObservacoes(r.observacoes() == null ? null : r.observacoes().trim());
+        coleta.setLogradouro(r.logradouro().trim());
+        coleta.setNumero(r.numero().trim());
+        coleta.setBairro(r.bairro().trim());
+        coleta.setCidade(r.cidade().trim());
+        coleta.setEstado(r.estado().trim().toUpperCase(Locale.ROOT));
+        coleta.setCep(r.cep().replace("-", ""));
+        coleta.setInstituicao(instituicao);
+        coleta.setCooperativa(validarCooperativa(r.cooperativaId()));
+        coleta.setPontoColeta(ponto);
+    }
+
+    private Coleta obterBloqueada(Long id) {
+        return coletaRepositorio.buscarParaAtualizar(id).orElseThrow(() -> new ExcecaoRecursoNaoEncontrado("Coleta nao encontrada."));
+    }
+
+    private boolean administrador(Usuario usuario) { return usuario.getPerfil() == PerfilUsuario.ADMINISTRADOR; }
+
+    private void validarAtiva(Instituicao instituicao) {
+        if (instituicao.getStatus() != StatusInstituicao.ATIVO)
+            throw new ExcecaoConflitoNegocio("A instituicao deve estar aprovada e ativa.");
     }
 }

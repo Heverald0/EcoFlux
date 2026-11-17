@@ -1,6 +1,7 @@
 package com.example.EcoFlux.dto.request;
 
 import com.example.EcoFlux.entity.enums.TipoMaterial;
+import com.example.EcoFlux.entity.enums.UnidadeMaterial;
 import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
@@ -51,5 +52,7 @@ public record ColetaAgendamentoRequisicao(
 
         Long instituicaoId,
 
-        Long cooperativaId
+        Long cooperativaId,
+        Long pontoColetaId,
+        UnidadeMaterial unidade
 ) {}

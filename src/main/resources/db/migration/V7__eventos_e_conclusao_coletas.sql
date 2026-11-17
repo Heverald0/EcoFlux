@@ -1,3 +1,11 @@
+ALTER TABLE tb_coletas ADD COLUMN unidade VARCHAR(10) NOT NULL DEFAULT 'KG';
+ALTER TABLE tb_coletas ADD COLUMN quantidade_real DECIMAL(12,2);
+ALTER TABLE tb_coletas ADD COLUMN data_conclusao TIMESTAMP;
+ALTER TABLE tb_coletas ADD COLUMN ponto_coleta_id BIGINT;
+ALTER TABLE tb_coletas ADD COLUMN versao BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tb_coletas ADD CONSTRAINT fk_coleta_ponto FOREIGN KEY (ponto_coleta_id) REFERENCES tb_pontos_coleta(id);
+CREATE INDEX idx_coletas_instituicao_data ON tb_coletas(instituicao_id, data_hora_agendamento);
+CREATE INDEX idx_coletas_cooperativa_status ON tb_coletas(cooperativa_id, status);
 CREATE TABLE tb_eventos (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     chave VARCHAR(150) NOT NULL UNIQUE,
