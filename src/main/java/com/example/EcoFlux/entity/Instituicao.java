@@ -1,6 +1,7 @@
 package com.example.EcoFlux.entity;
 
 import com.example.EcoFlux.entity.enums.TipoInstituicao;
+import com.example.EcoFlux.entity.enums.StatusInstituicao;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -31,6 +32,21 @@ public class Instituicao {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     private TipoInstituicao tipo;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private StatusInstituicao status = StatusInstituicao.PENDENTE;
+
+    @Column(name = "motivo_status", length = 500)
+    private String motivoStatus;
+
+    @Column(name = "data_analise")
+    private LocalDateTime dataAnalise;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "administrador_analise_id")
+    private Usuario administradorAnalise;
 
     @Column(nullable = false, length = 20)
     private String telefone;

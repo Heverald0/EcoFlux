@@ -2,6 +2,7 @@ package com.example.EcoFlux.dto.request.response;
 
 import com.example.EcoFlux.entity.Instituicao;
 import com.example.EcoFlux.entity.enums.TipoInstituicao;
+import com.example.EcoFlux.entity.enums.StatusInstituicao;
 
 import java.time.LocalDateTime;
 
@@ -19,7 +20,10 @@ public record InstituicaoResposta(
         String cep,
         Long idResponsavel,
         String nomeResponsavel,
-        LocalDateTime dataCriacao
+        LocalDateTime dataCriacao,
+        StatusInstituicao status,
+        String motivoStatus,
+        LocalDateTime dataAnalise
 ) {
     public static InstituicaoResposta converter(Instituicao instituicao) {
         return new InstituicaoResposta(
@@ -36,7 +40,10 @@ public record InstituicaoResposta(
                 instituicao.getCep(),
                 instituicao.getUsuarioResponsavel().getId(),
                 instituicao.getUsuarioResponsavel().getNome(),
-                instituicao.getDataCriacao()
+                instituicao.getDataCriacao(),
+                instituicao.getStatus(),
+                instituicao.getMotivoStatus(),
+                instituicao.getDataAnalise()
         );
     }
 }
