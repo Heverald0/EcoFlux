@@ -19,21 +19,26 @@ public record ColetaAgendamentoRequisicao(
 
         @NotNull(message = "A quantidade estimada em KG e obrigatoria.")
         @DecimalMin(value = "0.1", message = "A quantidade estimada deve ser no minimo 0.1 kg.")
+        @Digits(integer = 8, fraction = 2)
         BigDecimal quantidadeEstimadaKg,
 
         @Size(max = 255, message = "As observacoes devem ter no maximo 255 caracteres.")
         String observacoes,
 
         @NotBlank(message = "O logradouro e obrigatorio.")
+        @Size(max = 150)
         String logradouro,
 
         @NotBlank(message = "O numero e obrigatorio.")
+        @Size(max = 20)
         String numero,
 
         @NotBlank(message = "O bairro e obrigatorio.")
+        @Size(max = 100)
         String bairro,
 
         @NotBlank(message = "A cidade e obrigatoria.")
+        @Size(max = 100)
         String cidade,
 
         @NotBlank(message = "O estado (UF) e obrigatorio.")
@@ -41,6 +46,7 @@ public record ColetaAgendamentoRequisicao(
         String estado,
 
         @NotBlank(message = "O CEP e obrigatorio.")
+        @Pattern(regexp = "\\d{5}-?\\d{3}")
         String cep,
 
         Long instituicaoId,

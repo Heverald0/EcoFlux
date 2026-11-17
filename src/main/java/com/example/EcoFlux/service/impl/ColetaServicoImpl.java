@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -66,8 +67,8 @@ public class ColetaServicoImpl implements ColetaServico {
                 .numero(requisicao.numero().trim())
                 .bairro(requisicao.bairro().trim())
                 .cidade(requisicao.cidade().trim())
-                .estado(requisicao.estado().trim().toUpperCase())
-                .cep(requisicao.cep().trim())
+                .estado(requisicao.estado().trim().toUpperCase(Locale.ROOT))
+                .cep(requisicao.cep().replace("-", ""))
                 .status(StatusColeta.ENVIADA) // COL-03: Estado inicial ENVIADA
                 .usuarioSolicitante(usuarioSolicitante)
                 .instituicao(instituicao)
