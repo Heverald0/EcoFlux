@@ -10,6 +10,7 @@ import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
 import com.example.EcoFlux.exception.ExcecaoRegraNegocio;
 import com.example.EcoFlux.validacao.DocumentoBrasileiro;
 import org.springframework.security.access.AccessDeniedException;
+import com.example.EcoFlux.service.EventoServico;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import com.example.EcoFlux.service.InstituicaoServico;
@@ -25,6 +26,7 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
 
     private final InstituicaoRepositorio instituicaoRepositorio;
     private final UsuarioRepositorio usuarioRepositorio;
+    private final EventoServico eventos;
 
     @Override
     @Transactional
@@ -59,6 +61,9 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
             usuarioRepositorio.save(usuarioResponsavel);
         }
 
+        eventos.registrar("instituicao:" + instituicaoSalva.getId() + ":cadastro", "INSTITUICAO_CADASTRADA", "INSTITUICAO",
+                instituicaoSalva.getId(), usuarioResponsavel, usuarioResponsavel, instituicaoSalva,
+                "Cadastro institucional recebido e aguardando analise.");
         return InstituicaoResposta.converter(instituicaoSalva);
     }
 

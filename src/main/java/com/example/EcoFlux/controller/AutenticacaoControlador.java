@@ -2,7 +2,10 @@ package com.example.EcoFlux.controller;
 
 import com.example.EcoFlux.configuracao.ServicoToken;
 import com.example.EcoFlux.dto.request.LoginRequisicao;
+import com.example.EcoFlux.dto.request.CadastroContaRequisicao;
+import com.example.EcoFlux.dto.request.response.CadastroContaResposta;
 import com.example.EcoFlux.dto.request.response.UsuarioResposta;
+import com.example.EcoFlux.service.CadastroContaServico;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +31,7 @@ public class AutenticacaoControlador {
 
     private final AuthenticationManager gerenciadorAutenticacao;
     private final ServicoToken servicoToken;
+    private final CadastroContaServico cadastroContaServico;
     private final UsuarioRepositorio usuarios;
 
     @PostMapping("/login")
@@ -46,6 +50,10 @@ public class AutenticacaoControlador {
         return ResponseEntity.ok(new TokenResposta(tokenJWT, "Bearer", expiraEm, UsuarioResposta.aPartirDaEntidade(usuario)));
     }
 
+    @PostMapping("/cadastro")
+    public ResponseEntity<CadastroContaResposta> cadastrar(@RequestBody @Valid CadastroContaRequisicao requisicao) {
+        return ResponseEntity.status(201).body(cadastroContaServico.cadastrar(requisicao));
+    }
 
     @GetMapping("/me")
     public UsuarioResposta perfil(@AuthenticationPrincipal Usuario usuario) {

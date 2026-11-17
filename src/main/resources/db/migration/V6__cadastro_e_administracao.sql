@@ -1,5 +1,7 @@
 ALTER TABLE tb_usuarios ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'ATIVO';
 ALTER TABLE tb_usuarios ADD COLUMN versao_token BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tb_usuarios ADD COLUMN documento VARCHAR(11);
+CREATE UNIQUE INDEX uk_usuario_documento ON tb_usuarios(documento);
 ALTER TABLE tb_instituicoes ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'ATIVO';
 ALTER TABLE tb_instituicoes ALTER COLUMN status SET DEFAULT 'PENDENTE';
 ALTER TABLE tb_instituicoes ADD COLUMN motivo_status VARCHAR(500);

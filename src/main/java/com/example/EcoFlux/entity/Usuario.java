@@ -53,6 +53,8 @@ public class Usuario implements UserDetails {
     @Builder.Default
     private long versaoToken = 0;
 
+    @Column(length = 11, unique = true)
+    private String documento;
 
     @CreationTimestamp
     @Column(name = "data_criacao", nullable = false, updatable = false)
