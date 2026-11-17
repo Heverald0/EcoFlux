@@ -25,4 +25,14 @@ public final class AmbientalDtos {
     }
 
     public record Ranking(Long instituicaoId, String nome, long pontos, NivelSelo nivel) {}
+
+    public record Certificado(Long id, Long instituicaoId, String instituicao, NivelSelo nivel, long scoreBase,
+            String codigo, String regraVersao, LocalDate emissao, LocalDate validade, String status,
+            String motivo, LocalDateTime criadoEm) {
+        public static Certificado de(CertificadoAmbiental c) {
+            return new Certificado(c.getId(), c.getInstituicao().getId(), c.getInstituicao().getNome(), c.getNivel(),
+                    c.getScoreBase(), c.getCodigo(), c.getRegraVersao(), c.getEmissao(), c.getValidade(),
+                    c.isSubstituido() ? "SUPERADO" : c.getValidade().isBefore(LocalDate.now()) ? "EXPIRADO" : "VALIDO", c.getMotivo(), c.getDataCriacao());
+        }
+    }
 }
