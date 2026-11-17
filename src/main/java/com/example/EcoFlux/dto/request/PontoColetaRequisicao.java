@@ -23,22 +23,28 @@ public record PontoColetaRequisicao(
         String horarioFuncionamento,
 
         @NotBlank(message = "O logradouro e obrigatorio.")
+        @Size(max = 150)
         String logradouro,
 
         @NotBlank(message = "O numero e obrigatorio.")
+        @Size(max = 20)
         String numero,
 
         @NotBlank(message = "O bairro e obrigatorio.")
+        @Size(max = 100)
         String bairro,
 
         @NotBlank(message = "A cidade e obrigatoria.")
+        @Size(max = 100)
         String cidade,
 
         @NotBlank(message = "O estado (UF) e obrigatorio.")
         @Size(min = 2, max = 2, message = "O estado deve conter 2 caracteres.")
+        @Pattern(regexp = "(?i)AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO")
         String estado,
 
         @NotBlank(message = "O CEP e obrigatorio.")
+        @Pattern(regexp = "[0-9]{5}-?[0-9]{3}")
         String cep,
 
         @NotNull(message = "A latitude e obrigatoria para posicionamento no mapa.")
@@ -52,7 +58,7 @@ public record PontoColetaRequisicao(
         BigDecimal longitude,
 
         @NotEmpty(message = "Informe ao menos um tipo de material reciclavel aceito no ponto.")
-        Set<TipoMaterial> materiaisAceitos,
+        Set<@NotNull TipoMaterial> materiaisAceitos,
 
         Long instituicaoId
 ) {}

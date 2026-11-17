@@ -14,6 +14,7 @@ import java.util.List;
 public interface PontoColetaRepositorio extends JpaRepository<PontoColeta, Long> {
 
     boolean existsByNomeIgnoreCaseAndCidadeIgnoreCase(String nome, String cidade);
+    boolean existsByNomeIgnoreCaseAndCidadeIgnoreCaseAndIdNot(String nome, String cidade, Long id);
 
     @Query("""
             SELECT DISTINCT p FROM PontoColeta p
