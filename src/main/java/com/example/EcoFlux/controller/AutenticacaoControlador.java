@@ -2,6 +2,11 @@ package com.example.EcoFlux.controller;
 
 import com.example.EcoFlux.configuracao.ServicoToken;
 import com.example.EcoFlux.dto.request.LoginRequisicao;
+import com.example.EcoFlux.dto.request.response.UsuarioResposta;
+import com.example.EcoFlux.repository.UsuarioRepositorio;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.GetMapping;
 import java.util.Locale;
 import com.example.EcoFlux.dto.request.response.TokenResposta;
 import com.example.EcoFlux.entity.Usuario;
@@ -23,6 +28,7 @@ public class AutenticacaoControlador {
 
     private final AuthenticationManager gerenciadorAutenticacao;
     private final ServicoToken servicoToken;
+    private final UsuarioRepositorio usuarios;
 
     @PostMapping("/login")
     public ResponseEntity<TokenResposta> autenticar(@RequestBody @Valid LoginRequisicao requisicao) {
@@ -37,6 +43,19 @@ public class AutenticacaoControlador {
         String tokenJWT = servicoToken.gerarToken(usuario);
         Long expiraEm = servicoToken.obterTempoExpiracaoSegundos();
 
-        return ResponseEntity.ok(new TokenResposta(tokenJWT, expiraEm));
+        return ResponseEntity.ok(new TokenResposta(tokenJWT, "Bearer", expiraEm, UsuarioResposta.aPartirDaEntidade(usuario)));
+    }
+
+
+    @GetMapping("/me")
+    public UsuarioResposta perfil(@AuthenticationPrincipal Usuario usuario) {
+        return UsuarioResposta.aPartirDaEntidade(usuario);
+    }
+
+    @PostMapping("/logout")
+    @Transactional
+    public ResponseEntity<Void> sair(@AuthenticationPrincipal Usuario usuario) {
+        usuarios.revogarSessoes(usuario.getId());
+        return ResponseEntity.noContent().build();
     }
 }
