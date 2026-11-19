@@ -2,6 +2,7 @@ package com.example.EcoFlux.dto.request.response;
 
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
+import com.example.EcoFlux.entity.enums.StatusUsuario;
 
 import java.time.LocalDateTime;
 
@@ -10,7 +11,8 @@ public record UsuarioResposta(
         String nome,
         String email,
         PerfilUsuario perfil,
-        LocalDateTime dataCriacao
+        LocalDateTime dataCriacao,
+        StatusUsuario status
 ) {
     public static UsuarioResposta aPartirDaEntidade(Usuario usuario) {
         return new UsuarioResposta(
@@ -18,7 +20,8 @@ public record UsuarioResposta(
                 usuario.getNome(),
                 usuario.getEmail(),
                 usuario.getPerfil(),
-                usuario.getDataCriacao()
+                usuario.getDataCriacao(),
+                usuario.getStatus()
         );
     }
 }

@@ -1,6 +1,7 @@
 package com.example.EcoFlux.configuracao;
 
 import com.example.EcoFlux.repository.UsuarioRepositorio;
+import com.example.EcoFlux.entity.Usuario;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,7 +9,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -30,10 +30,13 @@ public class FiltroSeguranca extends OncePerRequestFilter {
         String token = recuperarToken(requisicao);
 
         if (token != null) {
-            String login = servicoToken.validarToken(token);
-            if (login != null) {
-                UserDetails usuario = usuarioRepositorio.findByEmail(login).orElse(null);
-                if (usuario != null) {
+            var dados = servicoToken.verificar(token);
+            if (dados != null && dados.getSubject() != null) {
+                Usuario usuario = usuarioRepositorio.findByEmail(dados.getSubject()).orElse(null);
+                Long versao = dados.getClaim("versao").asLong();
+                if (usuario != null && usuario.isEnabled() && usuario.isAccountNonLocked()
+                        && versao != null && versao == usuario.getVersaoToken()
+                        && usuario.getId().equals(dados.getClaim("id").asLong())) {
                     var autenticacao = new UsernamePasswordAuthenticationToken(
                             usuario,
                             null,
@@ -51,6 +54,6 @@ public class FiltroSeguranca extends OncePerRequestFilter {
         if (cabecalhoAutorizacao == null || !cabecalhoAutorizacao.startsWith("Bearer ")) {
             return null;
         }
-        return cabecalhoAutorizacao.replace("Bearer ", "").trim();
+        return cabecalhoAutorizacao.substring(7).trim();
     }
 }
