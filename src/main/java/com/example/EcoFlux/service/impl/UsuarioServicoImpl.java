@@ -5,6 +5,9 @@ import com.example.EcoFlux.dto.request.response.UsuarioResposta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
 import com.example.EcoFlux.exception.EmailJaCadastradoExcecao;
+import com.example.EcoFlux.exception.ExcecaoRegraNegocio;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import com.example.EcoFlux.service.UsuarioServico;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +25,10 @@ public class UsuarioServicoImpl implements UsuarioServico {
     @Override
     @Transactional
     public UsuarioResposta cadastrar(UsuarioCadastroRequisicao requisicao) {
-        String emailFormatado = requisicao.email().trim().toLowerCase();
+        String emailFormatado = requisicao.email().trim().toLowerCase(Locale.ROOT);
+        if (requisicao.senha().getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw new ExcecaoRegraNegocio("A senha deve ter no maximo 72 bytes em UTF-8.");
+        }
 
         if (usuarioRepositorio.existsByEmail(emailFormatado)) {
             throw new EmailJaCadastradoExcecao(emailFormatado);

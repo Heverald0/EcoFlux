@@ -12,7 +12,41 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@lombok.extern.slf4j.Slf4j
 public class ManipuladorExcecoesGlobal {
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<RespostaErro> arquivoGrande(Exception excecao, HttpServletRequest requisicao) {
+        return ResponseEntity.status(413).body(new RespostaErro(413, "Payload Too Large", "Arquivo excede o limite de 5 MB.", requisicao.getRequestURI()));
+    }
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<RespostaErro> acessoNegado(Exception excecao, HttpServletRequest requisicao) {
+        return ResponseEntity.status(403).body(new RespostaErro(403, "Forbidden", "Acesso negado.", requisicao.getRequestURI()));
+    }
+
+    @ExceptionHandler({ExcecaoRegraNegocio.class, org.springframework.http.converter.HttpMessageNotReadableException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class,
+            org.springframework.web.method.annotation.HandlerMethodValidationException.class,
+            org.springframework.web.multipart.support.MissingServletRequestPartException.class,
+            jakarta.validation.ConstraintViolationException.class})
+    public ResponseEntity<RespostaErro> entradaInvalida(Exception excecao, HttpServletRequest requisicao) {
+        String mensagem = excecao instanceof ExcecaoRegraNegocio ? excecao.getMessage() : "Requisicao invalida. Verifique os campos e filtros.";
+        return ResponseEntity.badRequest().body(new RespostaErro(400, "Bad Request", mensagem, requisicao.getRequestURI()));
+    }
+
+    @ExceptionHandler({org.springframework.dao.DataIntegrityViolationException.class,
+            org.springframework.orm.ObjectOptimisticLockingFailureException.class,
+            org.springframework.dao.PessimisticLockingFailureException.class})
+    public ResponseEntity<RespostaErro> conflitoPersistencia(Exception excecao, HttpServletRequest requisicao) {
+        return ResponseEntity.status(409).body(new RespostaErro(409, "Conflict",
+                "Registro duplicado, em uso ou alterado por outra operacao. Atualize os dados e tente novamente.", requisicao.getRequestURI()));
+    }
+
+    @ExceptionHandler({org.springframework.web.servlet.resource.NoResourceFoundException.class,
+            org.springframework.web.servlet.NoHandlerFoundException.class})
+    public ResponseEntity<RespostaErro> rotaNaoEncontrada(Exception excecao, HttpServletRequest requisicao) {
+        return ResponseEntity.status(404).body(new RespostaErro(404, "Not Found", "Rota nao encontrada.", requisicao.getRequestURI()));
+    }
 
     @ExceptionHandler(EmailJaCadastradoExcecao.class)
     public ResponseEntity<RespostaErro> manipularEmailJaCadastrado(
@@ -53,6 +87,7 @@ public class ManipuladorExcecoesGlobal {
             Exception excecao,
             HttpServletRequest requisicao
     ) {
+        log.error("Falha ao processar {} {}", requisicao.getMethod(), requisicao.getRequestURI(), excecao);
         RespostaErro erro = new RespostaErro(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase(),
