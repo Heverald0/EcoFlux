@@ -26,6 +26,7 @@ public class ColetaServicoImpl implements ColetaServico {
     private final HistoricoStatusColetaRepositorio historicoRepositorio;
     private final PontoColetaRepositorio pontoRepositorio;
     private final EventoServico eventos;
+    private final MaterialServico materiais;
 
     @Override
     @Transactional
@@ -151,6 +152,7 @@ public class ColetaServicoImpl implements ColetaServico {
         coleta.setStatus(novo);
         registrarEventoTimeline(coleta, atual, novo, requisicao.observacao() == null || requisicao.observacao().isBlank()
                 ? "Status atualizado de " + atual + " para " + novo + "." : requisicao.observacao().trim(), usuario);
+        if (novo == StatusColeta.REALIZADA || novo == StatusColeta.CONCLUIDA) materiais.registrarColetaConcluida(coleta, usuario);
         return ColetaResposta.converter(coleta);
     }
 
