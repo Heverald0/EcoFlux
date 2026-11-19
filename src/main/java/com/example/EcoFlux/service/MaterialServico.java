@@ -25,6 +25,7 @@ public class MaterialServico {
     private final RegistroMaterialRepositorio materiais;
     private final ColetaRepositorio coletas;
     private final EscopoAmbiental escopo;
+    private final EcoScoreServico score;
     private final EventoServico eventos;
     private final EntityManager entityManager;
 
@@ -72,7 +73,7 @@ public class MaterialServico {
                 .instituicao(coleta.getInstituicao()).usuario(coleta.getUsuarioSolicitante()).autor(autor).build();
 
         materiais.save(material);
-
+        score.creditar(material, autor);
         registrarEvento(material, autor);
         return material;
     }
@@ -88,6 +89,7 @@ public class MaterialServico {
         if (status == StatusMaterial.COLETADO) {
             material.setDataEfetivacao(LocalDateTime.now());
 
+            score.creditar(material, usuario);
         }
         registrarEvento(material, usuario);
         return MaterialDtos.Resposta.de(material);
