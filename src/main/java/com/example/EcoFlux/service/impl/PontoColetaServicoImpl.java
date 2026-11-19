@@ -7,6 +7,7 @@ import com.example.EcoFlux.entity.Instituicao;
 import com.example.EcoFlux.entity.PontoColeta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
+import com.example.EcoFlux.entity.enums.StatusInstituicao;
 import com.example.EcoFlux.entity.enums.StatusPontoColeta;
 import com.example.EcoFlux.entity.enums.TipoMaterial;
 import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
@@ -14,6 +15,9 @@ import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
 import com.example.EcoFlux.repository.PontoColetaRepositorio;
 import com.example.EcoFlux.service.PontoColetaServico;
+import com.example.EcoFlux.service.EventoServico;
+import org.springframework.security.access.AccessDeniedException;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +31,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
 
     private final PontoColetaRepositorio pontoColetaRepositorio;
     private final InstituicaoRepositorio instituicaoRepositorio;
+    private final EventoServico eventos;
 
     @Override
     @Transactional
@@ -62,13 +67,19 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
                 .instituicao(instituicao)
                 .build();
 
-        return PontoColetaResposta.converter(pontoColetaRepositorio.save(novoPonto));
+        PontoColeta salvo = pontoColetaRepositorio.save(novoPonto);
+        registrar(salvo, usuarioAutenticado, "PONTO_CADASTRADO", "Ponto de coleta cadastrado.");
+        return PontoColetaResposta.converter(salvo);
     }
 
     @Override
     @Transactional
     public PontoColetaResposta atualizar(Long id, PontoColetaRequisicao requisicao, Usuario usuarioAutenticado) {
         PontoColeta ponto = buscarEntidadeEValidarPermissao(id, usuarioAutenticado);
+
+        if (pontoColetaRepositorio.existsByNomeIgnoreCaseAndCidadeIgnoreCaseAndIdNot(requisicao.nome().trim(), requisicao.cidade().trim(), id)) {
+            throw new ExcecaoConflitoNegocio("Ja existe um ponto com este nome nesta cidade.");
+        }
 
         Instituicao instituicao = validarInstituicaoVinculada(requisicao.instituicaoId(), usuarioAutenticado);
 
@@ -87,7 +98,9 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
         ponto.setMateriaisAceitos(new HashSet<>(requisicao.materiaisAceitos()));
         ponto.setInstituicao(instituicao);
 
-        return PontoColetaResposta.converter(pontoColetaRepositorio.save(ponto));
+        PontoColeta salvo = pontoColetaRepositorio.save(ponto);
+        registrar(salvo, usuarioAutenticado, "PONTO_ATUALIZADO", "Dados do ponto de coleta atualizados.");
+        return PontoColetaResposta.converter(salvo);
     }
 
     @Override
@@ -100,12 +113,16 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
             throw new ExcecaoConflitoNegocio("Informe o motivo ao colocar o ponto de coleta em MANUTENCAO.");
         }
 
+        if (ponto.getStatus() == requisicao.status()) return PontoColetaResposta.converter(ponto);
         ponto.setStatus(requisicao.status());
         ponto.setMotivoStatus(requisicao.status() == StatusPontoColeta.MANUTENCAO
                 ? requisicao.motivo().trim()
                 : null);
 
-        return PontoColetaResposta.converter(pontoColetaRepositorio.save(ponto));
+        PontoColeta salvo = pontoColetaRepositorio.save(ponto);
+        registrar(salvo, usuarioAutenticado, "PONTO_STATUS_ALTERADO", "Status: " + ponto.getStatus()
+                + (ponto.getMotivoStatus() == null ? "" : ". " + ponto.getMotivoStatus()));
+        return PontoColetaResposta.converter(salvo);
     }
 
     @Override
@@ -140,7 +157,7 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
         boolean ehAdmin = usuarioAutenticado.getPerfil() == PerfilUsuario.ADMINISTRADOR;
 
         if (!ehCriador && !ehResponsavelInstituicao && !ehAdmin) {
-            throw new ExcecaoConflitoNegocio("Acesso negado: voce nao possui permissao para alterar este ponto de coleta.");
+            throw new AccessDeniedException("Voce nao possui permissao para alterar este ponto de coleta.");
         }
         return ponto;
     }
@@ -156,8 +173,15 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
 
         if (!instituicao.getUsuarioResponsavel().getId().equals(usuarioAutenticado.getId())
                 && usuarioAutenticado.getPerfil() != PerfilUsuario.ADMINISTRADOR) {
-            throw new ExcecaoConflitoNegocio("Apenas o responsavel pela instituicao pode vincular pontos de coleta a ela.");
+            throw new AccessDeniedException("Apenas o responsavel pela instituicao pode vincular pontos de coleta a ela.");
+        }
+        if (instituicao.getStatus() != StatusInstituicao.ATIVO) {
+            throw new ExcecaoConflitoNegocio("A instituicao precisa estar ativa para cadastrar pontos de coleta.");
         }
         return instituicao;
+    }
+
+    private void registrar(PontoColeta ponto, Usuario autor, String tipo, String mensagem) {
+        eventos.registrar(UUID.randomUUID().toString(), tipo, "PONTO_COLETA", ponto.getId(), autor, null, ponto.getInstituicao(), mensagem);
     }
 }
