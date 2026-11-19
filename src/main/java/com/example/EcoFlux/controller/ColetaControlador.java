@@ -32,6 +32,14 @@ public class ColetaControlador {
     private final JdbcTemplate jdbc;
     private final ColetaRepositorio repositorio;
 
+    @GetMapping
+    public Page<ColetaResposta> listar(@AuthenticationPrincipal Usuario usuario,
+            @RequestParam(required = false) StatusColeta status,
+            @RequestParam(required = false) LocalDate inicio,
+            @RequestParam(required = false) LocalDate fim,
+            @RequestParam(defaultValue = "false") boolean operacional, Pageable pagina) {
+        return coletaServico.listar(usuario, status, inicio, fim, operacional, pagina);
+    }
 
     @PutMapping("/{id}")
     @Transactional
