@@ -17,4 +17,6 @@ public interface ColetaServico {
     ColetaResposta atualizarStatus(Long id, AtualizarStatusColetaRequisicao requisicao, Usuario usuarioAutenticado);
     ColetaResposta cancelarColeta(Long id, Usuario usuarioAutenticado);
     List<EventoTimelineColetaResposta> consultarTimeline(Long coletaId, Usuario usuarioAutenticado);
+
+    ColetaResposta editar(Long id, ColetaAgendamentoRequisicao requisicao, Usuario usuario);
 }
