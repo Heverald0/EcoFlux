@@ -1,6 +1,7 @@
 package com.example.EcoFlux.controller;
 
 import com.example.EcoFlux.dto.MaterialDtos;
+import com.example.EcoFlux.dto.AmbientalDtos;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.*;
 import com.example.EcoFlux.service.*;
@@ -22,6 +23,7 @@ import java.util.List;
 @Validated
 public class MaterialControlador {
     private final MaterialServico materiais;
+    private final IndicadoresServico indicadores;
 
     public record Catalogo(TipoMaterial material, List<UnidadeMaterial> unidades) {}
 
@@ -50,6 +52,13 @@ public class MaterialControlador {
                 ate, material, status, pagina, tamanho, usuario);
     }
 
+    @GetMapping("/resumo")
+    public AmbientalDtos.Resumo resumo(@RequestParam(required = false) Long instituicaoId,
+            @RequestParam(required = false) LocalDate inicio, @RequestParam(required = false) LocalDate fim,
+            @AuthenticationPrincipal Usuario usuario) {
+        LocalDate ate = fim == null ? LocalDate.now() : fim;
+        return indicadores.resumo(instituicaoId, inicio == null ? ate.minusMonths(4).withDayOfMonth(1) : inicio, ate, usuario);
+    }
 
     @PatchMapping("/{id}/status")
     public MaterialDtos.Resposta status(@PathVariable Long id, @RequestBody @Valid MaterialDtos.AlterarStatus requisicao,
