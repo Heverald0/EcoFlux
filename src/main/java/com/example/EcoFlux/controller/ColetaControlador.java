@@ -15,6 +15,13 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.time.LocalDate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import com.example.EcoFlux.repository.ColetaRepositorio;
+import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
 
 @RestController
 @RequestMapping("/api/v1/coletas")
@@ -22,6 +29,15 @@ import java.util.List;
 public class ColetaControlador {
 
     private final ColetaServico coletaServico;
+
+
+    @PutMapping("/{id}")
+    @Transactional
+    public ColetaResposta editar(@PathVariable Long id, @RequestBody @Valid ColetaAgendamentoRequisicao requisicao,
+                                 @AuthenticationPrincipal Usuario usuario) {
+        return coletaServico.editar(id, requisicao, usuario);
+    }
+
 
     @PostMapping
     public ResponseEntity<ColetaResposta> agendar(
@@ -43,9 +59,10 @@ public class ColetaControlador {
 
     @GetMapping("/operacional")
     public ResponseEntity<List<ColetaResposta>> listarFilaOperacional(
-            @RequestParam(required = false) StatusColeta status
+            @RequestParam(required = false) StatusColeta status,
+            @AuthenticationPrincipal Usuario usuario
     ) {
-        List<ColetaResposta> coletas = coletaServico.listarPorStatusOperacional(status);
+        List<ColetaResposta> coletas = coletaServico.listarPorStatusOperacional(status, usuario);
         return ResponseEntity.ok(coletas);
     }
 
@@ -59,6 +76,7 @@ public class ColetaControlador {
     }
 
     @PatchMapping("/{id}/status")
+    @Transactional
     public ResponseEntity<ColetaResposta> atualizarStatus(
             @PathVariable Long id,
             @RequestBody @Valid AtualizarStatusColetaRequisicao requisicao,
@@ -69,6 +87,7 @@ public class ColetaControlador {
     }
 
     @PatchMapping("/{id}/cancelar")
+    @Transactional
     public ResponseEntity<ColetaResposta> cancelarColeta(
             @PathVariable Long id,
             @AuthenticationPrincipal Usuario usuarioAutenticado
@@ -84,11 +103,5 @@ public class ColetaControlador {
     ) {
         List<EventoTimelineColetaResposta> timeline = coletaServico.consultarTimeline(id, usuarioAutenticado);
         return ResponseEntity.ok(timeline);
-    }
-
-    @PutMapping("/{id}")
-    public ColetaResposta editar(@PathVariable Long id, @RequestBody @Valid ColetaAgendamentoRequisicao requisicao,
-                                 @AuthenticationPrincipal Usuario usuario) {
-        return coletaServico.editar(id, requisicao, usuario);
     }
 }
