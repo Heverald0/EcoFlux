@@ -46,3 +46,22 @@ CREATE TABLE tb_movimentos_score (
 
 CREATE INDEX idx_score_instituicao_periodo ON tb_movimentos_score(instituicao_id, data_referencia);
 CREATE INDEX idx_score_usuario_periodo ON tb_movimentos_score(usuario_id, data_referencia);
+
+CREATE TABLE tb_certificados_ambientais (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    instituicao_id BIGINT NOT NULL,
+    nivel VARCHAR(30) NOT NULL,
+    score_base BIGINT NOT NULL,
+    regra_versao VARCHAR(50) NOT NULL,
+    codigo VARCHAR(36) NOT NULL UNIQUE,
+    emissao DATE NOT NULL,
+    validade DATE NOT NULL,
+    motivo VARCHAR(200) NOT NULL,
+    substituido BOOLEAN NOT NULL DEFAULT FALSE,
+    autor_id BIGINT NOT NULL,
+    data_criacao TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_selo_instituicao FOREIGN KEY (instituicao_id) REFERENCES tb_instituicoes(id),
+    CONSTRAINT fk_selo_autor FOREIGN KEY (autor_id) REFERENCES tb_usuarios(id)
+);
+
+CREATE INDEX idx_selo_instituicao_emissao ON tb_certificados_ambientais(instituicao_id, emissao);

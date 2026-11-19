@@ -21,6 +21,7 @@ import java.util.UUID;
 @Transactional
 public class EcoScoreServico {
     private final MovimentoScoreRepositorio movimentos;
+    private final CertificadoAmbientalRepositorio certificados;
     private final EscopoAmbiental escopo;
     private final RegraEcoScore regra;
     private final EntityManager entityManager;
@@ -53,6 +54,7 @@ public class EcoScoreServico {
         movimentos.save(movimento);
         eventos.registrar("score:material:" + material.getId(), "ECOSCORE_CREDITO", "material", material.getId(),
                 autor, material.getUsuario(), instituicao, "EcoScore: " + movimento.getTotal() + " pontos registrados.");
+        if (instituicao != null && instituicao.getStatus() == StatusInstituicao.ATIVO) emitir(instituicao, autor, false);
     }
 
     @Transactional(readOnly = true)
@@ -90,11 +92,66 @@ public class EcoScoreServico {
                 (Long) l[2], regra.nivel((Long) l[2]))).toList();
     }
 
+    public AmbientalDtos.Certificado renovar(Long instituicaoId, Usuario usuario) {
+        Instituicao instituicao = escopo.instituicao(instituicaoId, usuario);
+        if (instituicao.getStatus() != StatusInstituicao.ATIVO)
+            throw new ExcecaoConflitoNegocio("Somente instituicoes ativas podem receber certificados.");
+        entityManager.lock(instituicao, LockModeType.PESSIMISTIC_WRITE);
+        return AmbientalDtos.Certificado.de(emitir(instituicao, usuario, true));
+    }
 
+    @Transactional(readOnly = true)
+    public List<AmbientalDtos.Certificado> certificados(Long instituicaoId, Usuario usuario) {
+        escopo.instituicao(instituicaoId, usuario);
+        return certificados.findByInstituicaoIdOrderByDataCriacaoDescIdDesc(instituicaoId)
+                .stream().map(AmbientalDtos.Certificado::de).toList();
+    }
 
+    @Transactional(readOnly = true)
+    public Page<AmbientalDtos.Certificado> listarCertificados(int pagina, int tamanho, Usuario usuario) {
+        Specification<CertificadoAmbiental> filtro = (r, q, b) -> b.and(b.isFalse(r.get("substituido")),
+                escopo.administrador(usuario) ? b.conjunction()
+                        : b.equal(r.get("instituicao").get("usuarioResponsavel").get("id"), usuario.getId()));
+        return certificados.findAll(filtro, PageRequest.of(pagina, Math.min(tamanho, 100),
+                Sort.by(Sort.Direction.DESC, "dataCriacao", "id"))).map(AmbientalDtos.Certificado::de);
+    }
 
+    private CertificadoAmbiental emitir(Instituicao instituicao, Usuario autor, boolean renovacao) {
+        long total = somar(instituicao.getId(), autor.getId(), LocalDate.of(1900, 1, 1), LocalDate.now()).total();
+        NivelSelo nivel = regra.nivel(total);
+        CertificadoAmbiental anterior = certificados.findFirstByInstituicaoIdOrderByDataCriacaoDescIdDesc(instituicao.getId()).orElse(null);
+        if (anterior != null && anterior.getNivel() == nivel && !anterior.getValidade().isBefore(LocalDate.now())) {
+            if (renovacao) throw new ExcecaoConflitoNegocio("O certificado atual ainda esta valido e no mesmo nivel.");
+            return anterior;
+        }
+        if (anterior != null) anterior.setSubstituido(true);
+        CertificadoAmbiental certificado = CertificadoAmbiental.builder().instituicao(instituicao).nivel(nivel)
+                .scoreBase(total).regraVersao(regra.getVersao()).codigo(UUID.randomUUID().toString())
+                .emissao(LocalDate.now()).validade(LocalDate.now().plusDays(regra.getValidadeDias()))
+                .motivo(anterior == null ? "Emissao inicial" : anterior.getNivel() != nivel ? "Evolucao de nivel" : "Renovacao")
+                .autor(autor).build();
+        certificados.save(certificado);
+        eventos.registrar("selo:" + certificado.getCodigo(), "ECOSELO_EMISSAO", "certificado", certificado.getId(),
+                autor, instituicao.getUsuarioResponsavel(), instituicao, "EcoSelo " + nivel + " emitido.");
+        return certificado;
+    }
 
+    @Transactional(readOnly = true)
+    public ResumoSelos resumoSelos(Usuario usuario) {
+        String filtro = escopo.administrador(usuario) ? "" : " and c.instituicao.usuarioResponsavel.id = :usuario";
+        var consulta = entityManager.createQuery("select c from CertificadoAmbiental c where c.substituido = false" + filtro,
+                CertificadoAmbiental.class);
+        if (!escopo.administrador(usuario)) consulta.setParameter("usuario", usuario.getId());
+        var atuais = consulta.getResultList();
+        var validos = atuais.stream().filter(c -> !c.getValidade().isBefore(LocalDate.now()) && c.getNivel() != NivelSelo.INICIAL).toList();
+        long ouro = validos.stream().filter(c -> c.getNivel() == NivelSelo.OURO).count();
+        long renovacoes = atuais.stream().filter(c -> !c.getValidade().isAfter(LocalDate.now().plusDays(30))).count();
+        double aderencia = atuais.stream().mapToDouble(c -> Math.min(100, 100.0 * c.getScoreBase() / regra.getOuro())).average().orElse(0);
+        return new ResumoSelos(validos.size(), ouro, java.math.BigDecimal.valueOf(aderencia).setScale(2, java.math.RoundingMode.HALF_UP), renovacoes);
+    }
 
+    public record ResumoSelos(long instituicoesCertificadas, long seloOuro, java.math.BigDecimal aderenciaMedia,
+                             long renovacoesProximasOuVencidas) {}
 
     private AmbientalDtos.Pontos somar(Long instituicaoId, Long usuarioId, LocalDate inicio, LocalDate fim) {
         String titular = instituicaoId == null ? "m.usuario.id" : "m.instituicao.id";
