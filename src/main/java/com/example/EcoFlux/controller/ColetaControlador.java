@@ -29,15 +29,24 @@ import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
 public class ColetaControlador {
 
     private final ColetaServico coletaServico;
+    private final JdbcTemplate jdbc;
+    private final ColetaRepositorio repositorio;
 
 
     @PutMapping("/{id}")
     @Transactional
     public ColetaResposta editar(@PathVariable Long id, @RequestBody @Valid ColetaAgendamentoRequisicao requisicao,
                                  @AuthenticationPrincipal Usuario usuario) {
+        validarSemRota(id, usuario);
         return coletaServico.editar(id, requisicao, usuario);
     }
 
+    private void validarSemRota(Long id, Usuario usuario) {
+        coletaServico.buscarPorId(id, usuario);
+        repositorio.buscarParaAtualizar(id);
+        Long total = jdbc.queryForObject("select count(*) from tb_paradas_rota p join tb_rotas r on r.id = p.rota_id where p.coleta_id = ? and r.status <> 'CONCLUIDA'", Long.class, id);
+        if (total != null && total > 0) throw new ExcecaoConflitoNegocio("Atualize esta coleta pela rota vinculada.");
+    }
 
     @PostMapping
     public ResponseEntity<ColetaResposta> agendar(
@@ -82,6 +91,7 @@ public class ColetaControlador {
             @RequestBody @Valid AtualizarStatusColetaRequisicao requisicao,
             @AuthenticationPrincipal Usuario usuarioAutenticado
     ) {
+        validarSemRota(id, usuarioAutenticado);
         ColetaResposta resposta = coletaServico.atualizarStatus(id, requisicao, usuarioAutenticado);
         return ResponseEntity.ok(resposta);
     }
@@ -92,6 +102,7 @@ public class ColetaControlador {
             @PathVariable Long id,
             @AuthenticationPrincipal Usuario usuarioAutenticado
     ) {
+        validarSemRota(id, usuarioAutenticado);
         ColetaResposta resposta = coletaServico.cancelarColeta(id, usuarioAutenticado);
         return ResponseEntity.ok(resposta);
     }
