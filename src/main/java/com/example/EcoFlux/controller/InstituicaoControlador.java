@@ -4,6 +4,11 @@ import com.example.EcoFlux.dto.request.InstituicaoCadastroRequisicao;
 import com.example.EcoFlux.dto.request.response.InstituicaoResposta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.service.InstituicaoServico;
+import com.example.EcoFlux.repository.InstituicaoRepositorio;
+import com.example.EcoFlux.dto.request.response.CooperativaResumo;
+import com.example.EcoFlux.entity.enums.TipoInstituicao;
+import com.example.EcoFlux.entity.enums.StatusInstituicao;
+import org.springframework.transaction.annotation.Transactional;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -19,6 +24,14 @@ import java.util.List;
 public class InstituicaoControlador {
 
     private final InstituicaoServico instituicaoServico;
+    private final InstituicaoRepositorio instituicoes;
+
+    @GetMapping("/cooperativas")
+    @Transactional(readOnly = true)
+    public List<CooperativaResumo> cooperativas() {
+        return instituicoes.findAllByTipoAndStatus(TipoInstituicao.COOPERATIVA, StatusInstituicao.ATIVO).stream()
+                .map(i -> new CooperativaResumo(i.getId(), i.getNome(), i.getCidade(), i.getEstado())).toList();
+    }
 
     @PostMapping
     public ResponseEntity<InstituicaoResposta> cadastrar(

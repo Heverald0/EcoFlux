@@ -18,6 +18,7 @@ import java.util.Optional;
 public interface UsuarioRepositorio extends JpaRepository<Usuario, Long>, JpaSpecificationExecutor<Usuario> {
     boolean existsByEmail(String email);
     Optional<Usuario> findByEmail(String email);
+    boolean existsByDocumento(String documento);
     boolean existsByPerfil(PerfilUsuario perfil);
     long countByStatus(StatusUsuario status);
     long countByPerfil(PerfilUsuario perfil);

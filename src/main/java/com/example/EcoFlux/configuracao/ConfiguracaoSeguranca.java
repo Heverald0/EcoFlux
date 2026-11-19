@@ -57,7 +57,7 @@ public class ConfiguracaoSeguranca {
             .sessionManagement(sessao -> sessao.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(autorizacao -> autorizacao
                 .requestMatchers(HttpMethod.POST, "/api/v1/usuarios").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/cadastro").permitAll()
                 .requestMatchers("/actuator/health", "/error", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMINISTRADOR")
                 .anyRequest().authenticated()

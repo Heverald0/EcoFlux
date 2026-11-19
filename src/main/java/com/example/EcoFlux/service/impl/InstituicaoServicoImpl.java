@@ -7,6 +7,10 @@ import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
 import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
 import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
+import com.example.EcoFlux.exception.ExcecaoRegraNegocio;
+import com.example.EcoFlux.validacao.DocumentoBrasileiro;
+import org.springframework.security.access.AccessDeniedException;
+import com.example.EcoFlux.service.EventoServico;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import com.example.EcoFlux.service.InstituicaoServico;
@@ -22,11 +26,15 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
 
     private final InstituicaoRepositorio instituicaoRepositorio;
     private final UsuarioRepositorio usuarioRepositorio;
+    private final EventoServico eventos;
 
     @Override
     @Transactional
     public InstituicaoResposta cadastrar(InstituicaoCadastroRequisicao requisicao, Usuario usuarioResponsavel) {
-        String documentoLimpo = requisicao.documento().replaceAll("[^0-9A-Za-z]", "").trim();
+        String documentoLimpo = DocumentoBrasileiro.normalizar(requisicao.documento());
+        if (!DocumentoBrasileiro.cnpjValido(documentoLimpo)) {
+            throw new ExcecaoRegraNegocio("documento: informe um CNPJ valido para a instituicao.");
+        }
 
         if (instituicaoRepositorio.existsByDocumento(documentoLimpo)) {
             throw new ExcecaoConflitoNegocio(String.format("Ja existe uma instituicao cadastrada com o documento '%s'.", requisicao.documento()));
@@ -53,6 +61,9 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
             usuarioRepositorio.save(usuarioResponsavel);
         }
 
+        eventos.registrar("instituicao:" + instituicaoSalva.getId() + ":cadastro", "INSTITUICAO_CADASTRADA", "INSTITUICAO",
+                instituicaoSalva.getId(), usuarioResponsavel, usuarioResponsavel, instituicaoSalva,
+                "Cadastro institucional recebido e aguardando analise.");
         return InstituicaoResposta.converter(instituicaoSalva);
     }
 
@@ -75,7 +86,7 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
         boolean ehAdmin = usuarioAutenticado.getPerfil() == PerfilUsuario.ADMINISTRADOR;
 
         if (!ehResponsavel && !ehAdmin) {
-            throw new ExcecaoConflitoNegocio("Acesso negado: voce nao tem permissao para acessar os dados desta instituicao.");
+            throw new AccessDeniedException("Voce nao tem permissao para acessar esta instituicao.");
         }
 
         return InstituicaoResposta.converter(instituicao);
