@@ -1,0 +1,46 @@
+name: Backend
+on:
+  push:
+  pull_request:
+jobs:
+  h2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: chmod +x mvnw
+      - run: ./mvnw -B verify
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: ecoflux_test
+          MYSQL_USER: ecoflux_test
+          MYSQL_PASSWORD: test-password-local-ci
+          MYSQL_ROOT_PASSWORD: root-password-local-ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/ecoflux_test?serverTimezone=UTC&allowPublicKeyRetrieval=true&sslMode=DISABLED
+      SPRING_DATASOURCE_USERNAME: ecoflux_test
+      SPRING_DATASOURCE_PASSWORD: test-password-local-ci
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      SPRING_FLYWAY_LOCATIONS: classpath:db/migration,classpath:db/migration-mysql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: chmod +x mvnw
+      - run: ./mvnw -B verify
