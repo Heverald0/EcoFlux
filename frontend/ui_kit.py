@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from html import escape
-from typing import Iterable
+from typing import Callable, Iterable
 
 from nicegui import ui
 
@@ -337,27 +337,17 @@ STYLES = '''
   .content-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
   .thumb { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; }
 
-  /* --- timeline / stepper --- */
-  .tl-step { display: flex; align-items: center; gap: 10px; }
-  .tl-dot { display: grid; width: 16px; height: 16px; flex: 0 0 16px; place-items: center; border-radius: 50%; }
-  .tl-dot.done { border: 1.5px solid var(--primary); color: var(--primary); }
-  .tl-dot.todo { border: 1.5px solid #C9CDD1; }
-  .tl-dot .material-symbols-outlined { font-size: 11px; }
-  .tl-title { font-size: 11px; }
-  .tl-meta { margin-top: 2px; color: var(--muted); font-size: 7px; }
-  .tl-arrow { padding: 4px 0 4px 6px; font-size: 13px; line-height: 1; }
+/* --- timeline / stepper --- */
+  .tl-wrap { padding: 8px 6px; }
+  .tl-step { display: flex; align-items: center; gap: 14px; }
+  .tl-dot { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 50%; }
+  .tl-dot.done { border: 2px solid var(--primary); color: var(--primary); background: #F0FDF4; }
+  .tl-dot.todo { border: 2px solid #C9CDD1; background: #fff; }
+  .tl-dot .material-symbols-outlined { font-size: 14px; }
+  .tl-title { font-size: 13px; font-weight: 500; }
+  .tl-meta { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+  .tl-arrow { padding: 5px 0 5px 8px; font-size: 15px; line-height: 1; color: var(--text); }
   .tl-arrow.todo { color: #C9CDD1; }
-  .step-num {
-    display: grid;
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
-    place-items: center;
-    border-radius: 50%;
-    color: #fff;
-    background: var(--primary);
-    font-size: 9px;
-  }
   .step-num.todo { color: var(--muted); background: #E5E5E5; }
 
   /* --- mapa (placeholder) --- */
@@ -457,14 +447,18 @@ STYLES = '''
   }
   .chip.on { color: #15803D; background: var(--primary-soft); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .btn-ghost {
+  .q-btn.btn-ghost {
+    height: 22px;
+    min-height: 22px !important;
     padding: 2px 12px;
     border: 1px solid var(--primary-dark);
-    border-radius: 999px;
-    background: #fff;
-    color: var(--text);
-    font-size: 9px;
-    cursor: pointer;
+    border-radius: 999px !important;
+    background: #fff !important;
+    color: var(--text) !important;
+    font-size: 9px !important;
+    font-weight: 400 !important;
+    text-transform: none !important;
+    box-shadow: none !important;
   }
   .quiz-box {
     display: grid;
@@ -655,14 +649,57 @@ def kpi_row(kpis: Iterable[m.Kpi]) -> None:
     h(f'<div class="grid-4">{"".join(cards)}</div>')
 
 
-def data_table(table: m.Table, divided: bool = False, tall: bool = False,
-               action: str = '') -> None:
-    """Tabela estatica. `action` adiciona um botao por linha na ultima coluna."""
+def data_table(
+    table: m.Table,
+    divided: bool = False,
+    tall: bool = False,
+    action: str = '',
+    on_action: Callable[[int, tuple], None] | None = None,
+) -> None:
+    """Tabela estatica ou com acao por linha via `on_action(index, row)`."""
+    classes = 'tbl' + (' divided' if divided else '') + (' tall' if tall else '')
+
+    if action and on_action is not None:
+        head_cols = ''.join(f'<th>{escape(col)}</th>' for col in table.columns) + '<th></th>'
+        body_rows = []
+        for idx, row in enumerate(table.rows):
+            cells_html = ''.join(
+                f'<td>{badge_html(cell) if isinstance(cell, m.Badge) else escape(str(cell))}</td>'
+                for cell in row
+            )
+            body_rows.append(f'<tr>{cells_html}<td class="act" data-act-idx="{idx}"></td></tr>')
+
+        html_tabela = (
+            f'<div class="tbl-wrap"><table class="{classes}">'
+            f'<thead><tr>{head_cols}</tr></thead>'
+            f'<tbody>{"".join(body_rows)}</tbody></table></div>'
+        )
+        with ui.element('div').classes('w-full') as wrap:
+            h(html_tabela)
+            for idx, row in enumerate(table.rows):
+                btn = ui.button(
+                    action,
+                    on_click=lambda i=idx, r=row: on_action(i, r),
+                    color=None,
+                ).props('flat dense no-caps').classes('btn-ghost')
+                # Move o botao real do Quasar para dentro da celula .act da linha idx
+                btn.move(wrap)
+                ui.run_javascript(
+                    f'''
+                    (() => {{
+                      const cell = document.querySelector('td.act[data-act-idx="{idx}"]');
+                      const el = document.getElementById('c{btn.id}');
+                      if (cell && el) cell.appendChild(el);
+                    }})();
+                    '''
+                )
+        return
+
     head = ''.join(f'<th>{escape(col)}</th>' for col in table.columns)
     body = []
     for row in table.rows:
         cells = ''.join(
-            f'<td>{badge_html(cell) if isinstance(cell, m.Badge) else escape(cell)}</td>'
+            f'<td>{badge_html(cell) if isinstance(cell, m.Badge) else escape(str(cell))}</td>'
             for cell in row
         )
         if action:
@@ -671,7 +708,6 @@ def data_table(table: m.Table, divided: bool = False, tall: bool = False,
             cells += (f'<td class="act"><button class="btn-ghost" '
                       f'onclick="ecoToast(\'{label} {target}: em breve\')">{label}</button></td>')
         body.append(f'<tr>{cells}</tr>')
-    classes = 'tbl' + (' divided' if divided else '') + (' tall' if tall else '')
     h(f'<div class="tbl-wrap"><table class="{classes}"><thead><tr>{head}</tr></thead>'
       f'<tbody>{"".join(body)}</tbody></table></div>')
 
@@ -778,7 +814,7 @@ def timeline(steps: Iterable[m.Step]) -> None:
         if i < len(steps) - 1:
             todo = '' if step.done else ' todo'
             blocks.append(f'<div class="tl-arrow{todo}">↓</div>')
-    h(f'<div>{"".join(blocks)}</div>')
+    h(f'<div class="tl-wrap">{"".join(blocks)}</div>')
 
 
 def dot_steps(steps: Iterable[m.Step]) -> None:

@@ -6,10 +6,26 @@ Cada tela monta o layout base e preenche o conteudo com os componentes de
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime
 from html import escape
+import re
+from typing import Any
 
 from nicegui import ui
 
+from api_client import (
+    ApiError,
+    agendar_coleta,
+    alterar_status_ponto_coleta,
+    atualizar_ponto_coleta,
+    atualizar_status_coleta,
+    buscar_timeline_coleta,
+    criar_ponto_coleta,
+    listar_minhas_coletas,
+    listar_minhas_instituicoes,
+    listar_pontos_coleta,
+)
 import mocks as m
 from ui_kit import (
     PRIMARY, bar_chart, card, chip_select, data_table, donut, donut_with_legend,
@@ -17,6 +33,80 @@ from ui_kit import (
     eco_button, numbered_steps, page_header, progress_footer, rank_list,
     route_map_html, stacked_metric_list, timeline,
 )
+
+_MAPA_MATERIAL_ENUM = {
+    'papel': 'PAPEL',
+    'papel e papelão': 'PAPEL',
+    'papelao': 'PAPEL',
+    'papelão': 'PAPEL',
+    'plástico': 'PLASTICO',
+    'plastico': 'PLASTICO',
+    'vidro': 'VIDRO',
+    'metal': 'METAL',
+    'orgânico': 'ORGANICO',
+    'organico': 'ORGANICO',
+    'eletrônico': 'ELETRONICO',
+    'eletronico': 'ELETRONICO',
+    'eletrônicos': 'ELETRONICO',
+    'eletronicos': 'ELETRONICO',
+    'óleo': 'OLEO',
+    'oleo': 'OLEO',
+    'misto': 'MISTO',
+}
+
+_ENUM_PARA_CHIP = {
+    'PAPEL': 'Papel',
+    'PLASTICO': 'Plástico',
+    'VIDRO': 'Vidro',
+    'METAL': 'Metal',
+    'ELETRONICO': 'Eletrônico',
+    'ORGANICO': 'Orgânico',
+    'OLEO': 'Óleo',
+    'MISTO': 'Misto',
+}
+
+_LABEL_STATUS_PONTO = {
+    'ATIVO': 'Ativo',
+    'INATIVO': 'Inativo',
+    'MANUTENCAO': 'Manutenção',
+    'MANUTENÇÃO': 'Manutenção',
+    'BLOQUEADO': 'Bloqueado',
+}
+
+_STATUS_PONTO_OPCOES = {
+    'ATIVO': 'Ativo',
+    'INATIVO': 'Inativo',
+    'MANUTENCAO': 'Manutenção',
+    'BLOQUEADO': 'Bloqueado',
+}
+
+_OPCOES_TIPO_MATERIAL_COLETA = {
+    'PAPEL': 'Papel e papelão',
+    'PLASTICO': 'Plástico',
+    'VIDRO': 'Vidro',
+    'METAL': 'Metal',
+    'ELETRONICO': 'Eletrônico',
+    'ORGANICO': 'Orgânico',
+    'OLEO': 'Óleo',
+    'MISTO': 'Misto',
+}
+
+_STATUS_COLETA_OPCOES = {
+    'ENVIADA': 'Enviada',
+    'EM_ANALISE': 'Em análise',
+    'AGENDADA': 'Agendada',
+    'EM_ROTA': 'Em rota',
+    'REALIZADA': 'Realizada',
+    'CANCELADA': 'Cancelada',
+}
+
+_TIPOS_INSTITUICAO_OPCOES = {
+    'EMPRESA': 'Empresa',
+    'CONDOMINIO': 'Condomínio',
+    'COOPERATIVA': 'Cooperativa',
+}
+
+_MESES_CURTOS = ('Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez')
 
 
 def _obrigatorios(**campos) -> bool:
@@ -28,17 +118,354 @@ def _obrigatorios(**campos) -> bool:
     return True
 
 
+def _normalizar_materiais(selecionados: set[str]) -> list[str]:
+    convertidos: list[str] = []
+    for item in selecionados:
+        chave = item.strip().lower()
+        enum_val = _MAPA_MATERIAL_ENUM.get(chave)
+        if enum_val and enum_val not in convertidos:
+            convertidos.append(enum_val)
+        elif not enum_val:
+            limpo = re.sub(r'[^A-Z_]', '', chave.upper())
+            if limpo and limpo not in convertidos:
+                convertidos.append(limpo)
+    return convertidos
+
+
+def _extrair_endereco_4_partes(endereco_completo: str) -> tuple[str, str, str, str] | None:
+    """Exige o formato: Rua, Numero, Bairro, Cidade."""
+    partes = [p.strip() for p in (endereco_completo or '').split(',') if p.strip()]
+    if len(partes) < 4:
+        return None
+    rua = partes[0][:150]
+    numero = partes[1][:30]
+    bairro = partes[2][:100]
+    cidade = re.sub(r'\s*[-/]\s*[A-Za-z]{2}$', '', partes[3]).strip()[:100]
+    if not (rua and numero and bairro and cidade):
+        return None
+    return rua, numero, bairro, cidade
+
+
+def _montar_payload_ponto(
+    *,
+    nome: str,
+    endereco_completo: str,
+    responsavel: str,
+    horarios: str,
+    materiais_selecionados: set[str],
+) -> dict[str, Any] | None:
+    """Monta PontoColetaRequisicao validando Rua, Numero, Bairro, Cidade."""
+    endereco_split = _extrair_endereco_4_partes(endereco_completo)
+    if endereco_split is None:
+        ui.notify(
+            'Informe o endereço no formato: Rua, Numero, Bairro, Cidade (separados por vírgula).',
+            type='warning',
+        )
+        return None
+
+    logradouro, numero, bairro, cidade = endereco_split
+
+    cep_match = re.search(r'\b\d{5}-?\d{3}\b', endereco_completo)
+    cep_limpo = re.sub(r'\D', '', cep_match.group(0)) if cep_match else '45820000'
+    if len(cep_limpo) < 8:
+        cep_limpo = '45820000'
+
+    uf_match = re.search(r'(?:[-/,\s]+)([A-Za-z]{2})(?:\s|$|,)', endereco_completo)
+    estado = uf_match.group(1).upper() if uf_match else 'BA'
+
+    horario_final = (horarios or '').strip()[:120] or 'Seg - Sex 08h às 17h'
+    materiais_enum = _normalizar_materiais(materiais_selecionados)
+
+    return {
+        'nome': nome.strip()[:150],
+        'nomeResponsavel': responsavel.strip()[:120],
+        'horarioFuncionamento': horario_final,
+        'logradouro': logradouro,
+        'numero': numero,
+        'bairro': bairro,
+        'cidade': cidade,
+        'estado': estado,
+        'cep': cep_limpo,
+        'latitude': -16.3766,
+        'longitude': -39.5808,
+        'materiaisAceitos': materiais_enum,
+    }
+
+
+def _converter_instituicoes_para_tabela(instituicoes: list[dict[str, Any]]) -> m.Table:
+    rows: list[tuple] = []
+    for inst in instituicoes:
+        nome = str(inst.get('nome') or '-')
+        tipo_raw = str(inst.get('tipo') or '').upper()
+        tipo_lbl = _TIPOS_INSTITUICAO_OPCOES.get(tipo_raw, tipo_raw.capitalize() or '-')
+        doc = str(inst.get('documento') or '-')
+        bairro = str(inst.get('bairro') or '').strip()
+        cidade = str(inst.get('cidade') or '').strip()
+        local = f'{bairro} - {cidade}' if (bairro and cidade) else (bairro or cidade or '-')
+        rows.append((nome, tipo_lbl, doc, local))
+
+    return m.Table(
+        columns=('Instituição', 'Tipo', 'Documento', 'Bairro / Cidade'),
+        rows=rows,
+    )
+
+
+def _converter_pontos_para_tabela(pontos: list[dict[str, Any]]) -> m.Table:
+    rows: list[tuple] = []
+    for p in pontos:
+        nome = str(p.get('nome') or '-')
+        bairro = str(p.get('bairro') or '-')
+        cidade = str(p.get('cidade') or '')
+        local = f'{bairro} - {cidade}' if cidade else bairro
+
+        mats = p.get('materiaisAceitos') or []
+        mats_str = ', '.join(str(x).capitalize() for x in mats) if mats else '-'
+
+        status_raw = str(p.get('status') or 'ATIVO').upper()
+        status_label = _LABEL_STATUS_PONTO.get(status_raw, status_raw.capitalize())
+        tone = 'green' if status_raw == 'ATIVO' else ('amber' if 'MANUT' in status_raw else 'gray')
+
+        rows.append((nome, local, mats_str, m.Badge(status_label, tone)))
+
+    return m.Table(
+        columns=('Ponto', 'Bairro / Cidade', 'Materiais', 'Status'),
+        rows=rows,
+    )
+
+
+def _normalizar_tipo_material_coleta(valor: str) -> str:
+    limpo = (valor or '').strip().lower()
+    if limpo in _MAPA_MATERIAL_ENUM:
+        return _MAPA_MATERIAL_ENUM[limpo]
+    for k, v in _MAPA_MATERIAL_ENUM.items():
+        if k in limpo:
+            return v
+    return re.sub(r'[^A-Z_]', '', (valor or '').strip().upper()) or 'PAPEL'
+
+
+def _montar_data_hora_futura(data_str: str, janela_str: str) -> str | None:
+    """Converte YYYY-MM-DD + janela de horario em ISO LocalDateTime no futuro."""
+    data_limpa = (data_str or '').strip()
+    if not data_limpa:
+        return None
+    try:
+        dia = datetime.strptime(data_limpa, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+    hora_match = re.search(r'(\d{1,2})h', janela_str or '')
+    hora = int(hora_match.group(1)) if hora_match else 9
+    hora = max(0, min(23, hora))
+    dt = datetime(dia.year, dia.month, dia.day, hora, 0, 0)
+    if dt <= datetime.now():
+        return None
+    return dt.isoformat()
+
+
+def _formatar_data_curta(iso_str: str) -> str:
+    """Formata ISO datetime para '02 Abr'."""
+    if not iso_str:
+        return '-'
+    try:
+        dt = datetime.fromisoformat(iso_str.replace('Z', ''))
+        return f'{dt.day:02d} {_MESES_CURTOS[dt.month - 1]}'
+    except ValueError:
+        return iso_str[:10]
+
+
+def _ordenar_coletas_canceladas_por_ultimo(coletas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mantem a ordem original, mas empurra qualquer coleta CANCELADA para o final."""
+    ativas_ou_concluidas = [
+        c for c in coletas if str(c.get('status') or '').strip().upper() != 'CANCELADA'
+    ]
+    canceladas = [
+        c for c in coletas if str(c.get('status') or '').strip().upper() == 'CANCELADA'
+    ]
+    return ativas_ou_concluidas + canceladas
+
+
+def _converter_coletas_para_tabela(coletas: list[dict[str, Any]]) -> m.Table:
+    rows: list[tuple] = []
+    for c in coletas:
+        data_fmt = _formatar_data_curta(str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or ''))
+        mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
+        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+        qtd = c.get('quantidadeEstimadaKg')
+        if qtd is not None:
+            qtd_num = int(qtd) if float(qtd).is_integer() else qtd
+            qtd_str = f'{qtd_num} kg'
+        else:
+            qtd_str = '-'
+
+        st_raw = str(c.get('status') or 'AGENDADA').upper()
+        st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
+        rows.append((data_fmt, mat_lbl, qtd_str, m.Badge(st_lbl)))
+
+    return m.Table(
+        columns=('Data', 'Material', 'Quantidade', 'Status'),
+        rows=rows,
+    )
+
+
+def _converter_timeline_para_etapas(eventos: list[dict[str, Any]]) -> list[m.Step]:
+    if not eventos:
+        return []
+
+    etapas: list[m.Step] = []
+    ultimo_status = ''
+    for ev in eventos:
+        novo_st = str(ev.get('statusNovo') or '').upper()
+        ultimo_status = novo_st
+        titulo = _STATUS_COLETA_OPCOES.get(
+            novo_st,
+            novo_st.replace('_', ' ').capitalize() or 'Atualização',
+        )
+        data_fmt = _formatar_data_curta(str(ev.get('dataRegistro') or ''))
+        hora_reg = str(ev.get('dataRegistro') or '')[11:16]
+        obs = str(ev.get('observacao') or '').strip()
+        meta_partes = [p for p in [f'{data_fmt} - {hora_reg}' if hora_reg else data_fmt, obs] if p]
+        etapas.append(m.Step(title=titulo, meta=' • '.join(meta_partes), done=True))
+
+    fluxo_padrao = [
+        ('EM_ANALISE', 'Em análise'),
+        ('AGENDADA', 'Agendada'),
+        ('EM_ROTA', 'Em rota'),
+        ('REALIZADA', 'Realizada'),
+    ]
+    if ultimo_status not in ('REALIZADA', 'CANCELADA'):
+        ja_feitos = {str(e.get('statusNovo') or '').upper() for e in eventos}
+        for cod_st, nome_st in fluxo_padrao:
+            if cod_st not in ja_feitos:
+                etapas.append(m.Step(title=nome_st, meta='Aguardando...', done=False))
+
+    return etapas
+
+
+def _formatar_numero_pt(valor: float) -> str:
+    if float(valor).is_integer():
+        return f'{int(valor):,}'.replace(',', '.')
+    return f'{valor:,.1f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def _atualizar_kpi(base: m.Kpi, label: str, value: str) -> m.Kpi:
+    try:
+        return replace(base, label=label, value=value)
+    except TypeError:
+        campos = getattr(base, '__dataclass_fields__', {})
+        kwargs: dict[str, Any] = {'label': label, 'value': value}
+        for nome in campos:
+            if nome not in ('label', 'value'):
+                kwargs[nome] = getattr(base, nome)
+        return m.Kpi(**kwargs)
+
+
+def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
+    """Busca dados reais disponiveis na API para KPIs e solicitacoes recentes."""
+    coletas: list[dict[str, Any]] = []
+    pontos: list[dict[str, Any]] = []
+    instituicoes: list[dict[str, Any]] = []
+
+    tem_coletas = False
+    tem_pontos = False
+    tem_instituicoes = False
+
+    try:
+        coletas = listar_minhas_coletas()
+        tem_coletas = True
+    except ApiError:
+        coletas = []
+
+    try:
+        pontos = listar_pontos_coleta()
+        tem_pontos = True
+    except ApiError:
+        pontos = []
+
+    try:
+        instituicoes = listar_minhas_instituicoes()
+        tem_instituicoes = True
+    except ApiError:
+        instituicoes = []
+
+    kpis_base = list(m.KPIS_DASHBOARD)
+
+    if tem_coletas and len(kpis_base) >= 2:
+        realizadas = [
+            c for c in coletas if str(c.get('status') or '').strip().upper() == 'REALIZADA'
+        ]
+        total_kg = sum(
+            float(c.get('quantidadeEstimadaKg') or 0) for c in realizadas
+        )
+        kpis_base[0] = _atualizar_kpi(
+            kpis_base[0],
+            'TOTAL RECICLADO (KG)',
+            _formatar_numero_pt(total_kg),
+        )
+        kpis_base[1] = _atualizar_kpi(
+            kpis_base[1],
+            'COLETAS REALIZADAS',
+            f'{len(realizadas):02d}' if len(realizadas) < 10 else str(len(realizadas)),
+        )
+
+    if tem_pontos and len(kpis_base) >= 3:
+        ativos = [
+            p for p in pontos if str(p.get('status') or 'ATIVO').strip().upper() == 'ATIVO'
+        ]
+        kpis_base[2] = _atualizar_kpi(
+            kpis_base[2],
+            'PONTOS ATIVOS',
+            f'{len(ativos):02d}' if len(ativos) < 10 else str(len(ativos)),
+        )
+
+    if tem_instituicoes and len(kpis_base) >= 4:
+        kpis_base[3] = _atualizar_kpi(
+            kpis_base[3],
+            'INSTITUIÇÕES',
+            f'{len(instituicoes):02d}' if len(instituicoes) < 10 else str(len(instituicoes)),
+        )
+
+    if tem_coletas and coletas:
+        mapa_inst = {
+            int(i['id']): str(i.get('nome') or f"Instituição #{i['id']}")
+            for i in instituicoes
+            if i.get('id') is not None
+        }
+        recentes_rows: list[tuple] = []
+        for c in list(reversed(coletas))[:5]:
+            inst_id = c.get('instituicaoId')
+            origem = (
+                mapa_inst.get(int(inst_id))
+                if inst_id is not None and int(inst_id) in mapa_inst
+                else (str(c.get('bairro') or '').strip() or 'Solicitação própria')
+            )
+            mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
+            mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+            st_raw = str(c.get('status') or 'ENVIADA').upper()
+            st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
+            recentes_rows.append((origem, mat_lbl, m.Badge(st_lbl)))
+
+        tabela_recentes = m.Table(
+            columns=('Instituição', 'Material', 'Status'),
+            rows=recentes_rows,
+        )
+    else:
+        tabela_recentes = m.SOLICITACOES_RECENTES
+
+    return kpis_base, tabela_recentes
+
+
 @ui.page('/dashboard')
 def dashboard() -> None:
     with layout('/dashboard'):
         page_header('Visão Geral', 'Resumo das atividades de reciclagem - Abril 2026')
-        kpi_row(m.KPIS_DASHBOARD)
+        kpis_dashboard, tabela_recentes = _montar_dados_dashboard()
+        kpi_row(kpis_dashboard)
 
         with grid('2'):
             with card('Materiais coletados - 05 meses'):
                 bar_chart(m.MESES_5)
             with card('Solicitações recentes', more='Ver mais'):
-                data_table(m.SOLICITACOES_RECENTES)
+                data_table(tabela_recentes)
 
         with grid('3'):
             with card('Ranking de instituições', cls='card-sm'):
@@ -54,6 +481,120 @@ def pontos_de_coleta() -> None:
     with layout('/pontos-de-coleta'):
         page_header('Pontos de coleta',
                     'Gerencie e visualize os pontos de descarte cadastrados na plataforma')
+
+        dialog_editar = ui.dialog()
+        carregar_tabela_ref: list[Any] = [None]
+
+        def abrir_modal_edicao(ponto: dict[str, Any]) -> None:
+            dialog_editar.clear()
+            ponto_id = ponto.get('id')
+            if not ponto_id:
+                ui.notify('Ponto sem ID válido para edição.', type='warning')
+                return
+
+            end_inicial = ', '.join(
+                parte for parte in [
+                    str(ponto.get('logradouro') or '').strip(),
+                    str(ponto.get('numero') or '').strip(),
+                    str(ponto.get('bairro') or '').strip(),
+                    str(ponto.get('cidade') or '').strip(),
+                ]
+                if parte
+            )
+
+            mats_iniciais = {
+                _ENUM_PARA_CHIP.get(str(x).upper(), str(x).capitalize())
+                for x in (ponto.get('materiaisAceitos') or [])
+            }
+            mats_iniciais = {x for x in mats_iniciais if x in m.MATERIAIS_ACEITOS}
+
+            status_atual = str(ponto.get('status') or 'ATIVO').upper()
+            if status_atual not in _STATUS_PONTO_OPCOES:
+                status_atual = 'ATIVO'
+
+            with dialog_editar, ui.card().style('width:540px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(f'<div class="card-title" style="margin-bottom:12px">Editar ponto #{ponto_id}</div>')
+                with ui.element('div').classes('form-grid'):
+                    ed_nome = form_field('Nome do ponto', value=str(ponto.get('nome') or ''))
+                    ed_end = form_field(
+                        'Endereço completo',
+                        value=end_inicial,
+                        placeholder='Rua, Numero, Bairro, Cidade',
+                    )
+                    with ui.element('div').classes('form-grid cols-2'):
+                        ed_resp = form_field('Responsável', value=str(ponto.get('nomeResponsavel') or ''))
+                        ed_hor = form_field('Horários', value=str(ponto.get('horarioFuncionamento') or ''))
+                    with ui.element('div'):
+                        h('<label class="form-label">Materiais aceitos</label>')
+                        ed_mats = chip_select(m.MATERIAIS_ACEITOS, mats_iniciais)
+
+                    with ui.element('div').classes('form-grid cols-2'):
+                        with ui.element('div'):
+                            h('<label class="form-label">Status do ponto</label>')
+                            ed_status = ui.select(
+                                _STATUS_PONTO_OPCOES,
+                                value=status_atual,
+                            ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+                        ed_motivo = form_field(
+                            'Motivo do status (opcional)',
+                            value=str(ponto.get('motivoStatus') or ''),
+                            placeholder='Ex: Manutenção programada',
+                        )
+
+                    def salvar_edicao() -> None:
+                        if not _obrigatorios(nome=ed_nome, endereço=ed_end, responsável=ed_resp):
+                            return
+                        if not ed_mats:
+                            ui.notify('Selecione ao menos um material aceito.', type='warning')
+                            return
+
+                        payload = _montar_payload_ponto(
+                            nome=ed_nome.value,
+                            endereco_completo=ed_end.value,
+                            responsavel=ed_resp.value,
+                            horarios=ed_hor.value,
+                            materiais_selecionados=ed_mats,
+                        )
+                        if payload is None:
+                            return
+
+                        if ponto.get('latitude') is not None:
+                            payload['latitude'] = ponto['latitude']
+                        if ponto.get('longitude') is not None:
+                            payload['longitude'] = ponto['longitude']
+                        if ponto.get('telefoneContato'):
+                            payload['telefoneContato'] = ponto['telefoneContato']
+                        if ponto.get('idInstituicao') is not None:
+                            payload['instituicaoId'] = ponto['idInstituicao']
+
+                        try:
+                            atualizar_ponto_coleta(int(ponto_id), payload)
+                            novo_status = str(ed_status.value or status_atual).upper()
+                            motivo_novo = (ed_motivo.value or '').strip()
+                            motivo_antigo = str(ponto.get('motivoStatus') or '').strip()
+                            if novo_status != status_atual or motivo_novo != motivo_antigo:
+                                alterar_status_ponto_coleta(
+                                    int(ponto_id),
+                                    novo_status,
+                                    motivo_novo or None,
+                                )
+                            ui.notify('Ponto de coleta atualizado com sucesso!', type='positive')
+                            dialog_editar.close()
+                            if carregar_tabela_ref[0]:
+                                carregar_tabela_ref[0](notificar_erro=True)
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-end gap-2').style('margin-top:8px'):
+                        eco_button('Cancelar', dialog_editar.close, cls='outline')
+                        eco_button(
+                            'Salvar alterações',
+                            salvar_edicao,
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+            dialog_editar.open()
 
         with grid('2'):
             with card():
@@ -71,7 +612,7 @@ def pontos_de_coleta() -> None:
                     nome = form_field('Nome do ponto',
                                       placeholder='Ex: Ecoponto Jardim de Eunápolis')
                     endereco = form_field('Endereço completo',
-                                          placeholder='Rua, número, bairro, cidade')
+                                          placeholder='Rua, Numero, Bairro, Cidade')
                     with ui.element('div').classes('form-grid cols-2'):
                         responsavel = form_field('Responsável:', placeholder='Nome')
                         horarios = form_field('Horários', placeholder='Seg - Sex 8h à 17h')
@@ -87,13 +628,60 @@ def pontos_de_coleta() -> None:
                         if not materiais:
                             ui.notify('Selecione ao menos um material aceito.', type='warning')
                             return
-                        ui.notify(f'Ponto "{nome.value}" cadastrado com sucesso!',
-                                  type='positive')
+
+                        payload = _montar_payload_ponto(
+                            nome=nome.value,
+                            endereco_completo=endereco.value,
+                            responsavel=responsavel.value,
+                            horarios=horarios.value,
+                            materiais_selecionados=materiais,
+                        )
+                        if payload is None:
+                            return
+                        if not payload['materiaisAceitos']:
+                            ui.notify('Nenhum material válido selecionado para envio.', type='warning')
+                            return
+
+                        try:
+                            criado = criar_ponto_coleta(payload)
+                            nome_criado = criado.get('nome') or nome.value
+                            ui.notify(f'Ponto "{nome_criado}" cadastrado com sucesso!',
+                                      type='positive')
+                            nome.value = ''
+                            endereco.value = ''
+                            responsavel.value = ''
+                            horarios.value = ''
+                            if carregar_tabela_ref[0]:
+                                carregar_tabela_ref[0](notificar_erro=True)
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
 
                     eco_button('Cadastrar ponto', cadastrar, cls='dark eco-block')
 
         with card('Pontos cadastrados'):
-            data_table(m.PONTOS_CADASTRADOS, action='Editar')
+            tabela_container = ui.element('div')
+
+            def carregar_tabela(notificar_erro: bool = False) -> None:
+                tabela_container.clear()
+                with tabela_container:
+                    try:
+                        pontos = listar_pontos_coleta()
+                        if pontos:
+                            data_table(
+                                _converter_pontos_para_tabela(pontos),
+                                action='Editar',
+                                on_action=lambda idx, _row, pts=pontos: abrir_modal_edicao(pts[idx]),
+                            )
+                        else:
+                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Nenhum ponto de coleta cadastrado até o momento.</div>')
+                    except ApiError as exc:
+                        if notificar_erro:
+                            ui.notify(exc.message, type='warning')
+                        data_table(m.PONTOS_CADASTRADOS, action='Editar')
+
+            carregar_tabela_ref[0] = carregar_tabela
+            carregar_tabela(notificar_erro=False)
 
 
 @ui.page('/agendamentos')
@@ -102,36 +690,269 @@ def agendamentos() -> None:
         page_header('Agendamento de retirada',
                     'Solicite a coleta seletiva e acompanhe o status da solicitação')
 
+        selecionada_id: dict[str, int | None] = {'id': None}
+        dialog_status = ui.dialog()
+        carregar_coletas_ref: list[Any] = [None]
+        render_timeline_ref: list[Any] = [None]
+
+        mapa_instituicoes: dict[int, str] = {}
+        mapa_cooperativas: dict[int, str] = {}
+        try:
+            for inst in listar_minhas_instituicoes():
+                if inst.get('id') is not None:
+                    inst_id = int(inst['id'])
+                    nome_inst = str(inst.get('nome') or f'Instituição #{inst_id}')
+                    tipo_inst = str(inst.get('tipo') or '').strip().upper()
+                    if tipo_inst == 'COOPERATIVA':
+                        mapa_cooperativas[inst_id] = nome_inst
+                    else:
+                        mapa_instituicoes[inst_id] = nome_inst
+        except ApiError:
+            mapa_instituicoes = {}
+            mapa_cooperativas = {}
+
+        def abrir_modal_status(coleta: dict[str, Any]) -> None:
+            dialog_status.clear()
+            cid = coleta.get('id')
+            if not cid:
+                ui.notify('Coleta sem ID válido.', type='warning')
+                return
+
+            st_atual = str(coleta.get('status') or 'ENVIADA').upper()
+            if st_atual not in _STATUS_COLETA_OPCOES:
+                st_atual = 'ENVIADA'
+
+            with dialog_status, ui.card().style('width:440px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(f'<div class="card-title" style="margin-bottom:12px">Status da coleta #{cid}</div>')
+                with ui.element('div').classes('form-grid'):
+                    with ui.element('div'):
+                        h('<label class="form-label">Novo status</label>')
+                        sel_st = ui.select(
+                            _STATUS_COLETA_OPCOES,
+                            value=st_atual,
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+                    obs_st = form_field('Observação (opcional)', placeholder='Ex: Coletado em 11 de abr')
+
+                    def salvar_status() -> None:
+                        try:
+                            atualizar_status_coleta(
+                                int(cid),
+                                str(sel_st.value or st_atual).upper(),
+                                obs_st.value,
+                            )
+                            ui.notify(f'Status da coleta #{cid} atualizado!', type='positive')
+                            dialog_status.close()
+                            if carregar_coletas_ref[0]:
+                                carregar_coletas_ref[0](notificar_erro=True, focar_id=int(cid))
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-end gap-2').style('margin-top:8px'):
+                        eco_button('Cancelar', dialog_status.close, cls='outline')
+                        eco_button(
+                            'Atualizar',
+                            salvar_status,
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+            dialog_status.open()
+
         with grid('2'):
             with card('Nova solicitação'):
                 with ui.element('div').classes('form-grid'):
-                    form_field('Instituição solicitante', options=m.INSTITUICOES,
-                               value=m.INSTITUICOES[0])
-                    material = form_field('Tipo do material', value='Papel e papelão')
+                    with ui.element('div'):
+                        h('<label class="form-label">Instituição solicitante</label>')
+                        instituicao_select = ui.select(
+                            mapa_instituicoes,
+                            value=None,
+                        ).props(
+                            'outlined dense hide-bottom-space options-dense clearable '
+                            'aria-label="Instituição solicitante"'
+                        ).classes('eco-field')
+
+                    material = form_field(
+                        'Tipo do material',
+                        options=list(_OPCOES_TIPO_MATERIAL_COLETA.values()),
+                        value=_OPCOES_TIPO_MATERIAL_COLETA['PAPEL'],
+                    )
                     with ui.element('div').classes('form-grid cols-2'):
                         data = form_field('Data preferencial', props='type=date')
-                        form_field('Horários', options=m.JANELAS_HORARIO,
-                                   value=m.JANELAS_HORARIO[0])
+                        janela = form_field('Horários', options=m.JANELAS_HORARIO,
+                                            value=m.JANELAS_HORARIO[0])
                     with ui.element('div').classes('form-grid cols-2'):
                         quantidade = form_field('Quantidade estimada', value='50',
-                                                props='suffix=KG type=number min=1')
-                        form_field('Cooperativa', options=m.COOPERATIVAS,
-                                   value=m.COOPERATIVAS[0])
-                    form_field('Observações', placeholder='Informações disponíveis...')
+                                                props='suffix=KG type=number min=0.1 step=0.1')
+                        with ui.element('div'):
+                            h('<label class="form-label">Cooperativa</label>')
+                            cooperativa_select = ui.select(
+                                mapa_cooperativas,
+                                value=None,
+                            ).props(
+                                'outlined dense hide-bottom-space options-dense clearable '
+                                'aria-label="Cooperativa"'
+                            ).classes('eco-field')
+                    endereco_coleta = form_field(
+                        'Endereço de coleta',
+                        placeholder='Rua, Numero, Bairro, Cidade',
+                    )
+                    observacoes = form_field('Observações', placeholder='Informações disponíveis...')
 
                     def enviar() -> None:
-                        if _obrigatorios(material=material, data=data, quantidade=quantidade):
-                            ui.notify('Solicitação enviada! Acompanhe o status ao lado.',
-                                      type='positive')
+                        if not _obrigatorios(
+                            material=material,
+                            data=data,
+                            quantidade=quantidade,
+                            endereço=endereco_coleta,
+                        ):
+                            return
+
+                        data_hora_iso = _montar_data_hora_futura(
+                            str(data.value or ''),
+                            str(janela.value or ''),
+                        )
+                        if not data_hora_iso:
+                            ui.notify(
+                                'Escolha uma data preferencial futura válida.',
+                                type='warning',
+                            )
+                            return
+
+                        end_split = _extrair_endereco_4_partes(str(endereco_coleta.value or ''))
+                        if end_split is None:
+                            ui.notify(
+                                'Informe o endereço no formato: Rua, Numero, Bairro, Cidade.',
+                                type='warning',
+                            )
+                            return
+
+                        try:
+                            qtd_val = float(str(quantidade.value or '0').replace(',', '.'))
+                        except ValueError:
+                            ui.notify('Quantidade estimada inválida.', type='warning')
+                            return
+
+                        if qtd_val < 0.1:
+                            ui.notify('A quantidade estimada deve ser no mínimo 0.1 kg.', type='warning')
+                            return
+
+                        logradouro, numero, bairro, cidade = end_split
+                        payload: dict[str, Any] = {
+                            'dataHoraAgendamento': data_hora_iso,
+                            'janelaHorario': str(janela.value or '08:00 - 10:00')[:50],
+                            'tipoMaterial': _normalizar_tipo_material_coleta(str(material.value or '')),
+                            'quantidadeEstimadaKg': qtd_val,
+                            'observacoes': (str(observacoes.value or '')).strip()[:255] or None,
+                            'logradouro': logradouro,
+                            'numero': numero,
+                            'bairro': bairro,
+                            'cidade': cidade,
+                            'estado': 'BA',
+                            'cep': '45820000',
+                        }
+                        if mapa_instituicoes and instituicao_select.value is not None:
+                            payload['instituicaoId'] = int(instituicao_select.value)
+                        if mapa_cooperativas and cooperativa_select.value is not None:
+                            payload['cooperativaId'] = int(cooperativa_select.value)
+
+                        try:
+                            criada = agendar_coleta(payload)
+                            novo_id = criada.get('id')
+                            ui.notify(
+                                f'Solicitação #{novo_id or ""} enviada com sucesso!',
+                                type='positive',
+                            )
+                            data.value = ''
+                            endereco_coleta.value = ''
+                            observacoes.value = ''
+                            if carregar_coletas_ref[0]:
+                                carregar_coletas_ref[0](
+                                    notificar_erro=True,
+                                    focar_id=int(novo_id) if novo_id is not None else None,
+                                )
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
 
                     eco_button('Enviar Solicitação', enviar, cls='dark eco-block')
 
-            with card(f'Status da solicitação # {m.SOLICITACAO_ID}'):
-                timeline(m.SOLICITACAO_ETAPAS)
+            with card():
+                status_card_container = ui.element('div')
+
+                def render_timeline(coleta_id: int | None) -> None:
+                    status_card_container.clear()
+                    with status_card_container:
+                        if not coleta_id:
+                            h('<div class="card-head"><div><div class="card-title">'
+                              'Status da solicitação</div></div></div>'
+                              '<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Nenhuma solicitação selecionada.</div>')
+                            return
+                        h(f'<div class="card-head"><div><div class="card-title">'
+                          f'Status da solicitação # {coleta_id}</div></div></div>')
+                        try:
+                            eventos = buscar_timeline_coleta(coleta_id)
+                            etapas = _converter_timeline_para_etapas(eventos)
+                            if etapas:
+                                timeline(etapas)
+                            else:
+                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                                  'Sem eventos registrados para esta solicitação.</div>')
+                        except ApiError as exc:
+                            if exc.status_code != 404:
+                                ui.notify(exc.message, type='warning')
+                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Sem eventos registrados para esta solicitação.</div>')
+
+                render_timeline_ref[0] = render_timeline
+                render_timeline(None)
 
         with ui.element('div').classes('narrow'):
             with card('Históricos de coletas'):
-                data_table(m.HISTORICO_COLETAS)
+                historico_container = ui.element('div')
+
+                def carregar_coletas(notificar_erro: bool = False, focar_id: int | None = None) -> None:
+                    historico_container.clear()
+                    with historico_container:
+                        try:
+                            coletas_raw = listar_minhas_coletas()
+                            coletas = _ordenar_coletas_canceladas_por_ultimo(coletas_raw)
+                            if not coletas:
+                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                                  'Nenhuma coleta agendada até o momento.</div>')
+                                if render_timeline_ref[0]:
+                                    render_timeline_ref[0](None)
+                                return
+
+                            alvo_id = focar_id or selecionada_id['id'] or coletas[0].get('id')
+                            if alvo_id is not None:
+                                selecionada_id['id'] = int(alvo_id)
+
+                            def acao_linha(idx: int, _row: tuple, cols: list[dict[str, Any]] = coletas) -> None:
+                                item = cols[idx]
+                                if item.get('id') is not None:
+                                    cid_int = int(item['id'])
+                                    selecionada_id['id'] = cid_int
+                                    if render_timeline_ref[0]:
+                                        render_timeline_ref[0](cid_int)
+                                abrir_modal_status(item)
+
+                            data_table(
+                                _converter_coletas_para_tabela(coletas),
+                                action='Status',
+                                on_action=acao_linha,
+                            )
+                            if render_timeline_ref[0]:
+                                render_timeline_ref[0](selecionada_id['id'])
+                        except ApiError as exc:
+                            if notificar_erro:
+                                ui.notify(exc.message, type='warning')
+                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Nenhuma coleta agendada até o momento.</div>')
+                            if render_timeline_ref[0]:
+                                render_timeline_ref[0](None)
+
+                carregar_coletas_ref[0] = carregar_coletas
+                carregar_coletas(notificar_erro=False)
 
 
 @ui.page('/materiais')
@@ -364,8 +1185,20 @@ def administracao() -> None:
         kpi_row(m.KPIS_ADMIN)
 
         with grid('65'):
-            with card('Usuários e responsáveis'):
-                data_table(m.USUARIOS, divided=True, tall=True)
+            with card('Minhas instituições'):
+                inst_tabela_container = ui.element('div')
+                with inst_tabela_container:
+                    try:
+                        lista = listar_minhas_instituicoes()
+                        if lista:
+                            data_table(_converter_instituicoes_para_tabela(lista), divided=True, tall=True)
+                        else:
+                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Nenhuma instituição vinculada ao usuário até o momento.</div>')
+                    except ApiError as exc:
+                        ui.notify(exc.message, type='warning')
+                        h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                          'Nenhuma instituição vinculada ao usuário até o momento.</div>')
 
             with ui.element('div').classes('stack'):
                 with card('Cadastros em análise', cls='card-sm'):
@@ -382,6 +1215,7 @@ def administracao() -> None:
 
                 with card('Perfis de acesso', cls='card-sm'):
                     stacked_metric_list(m.PERFIS_ACESSO)
+
 
 def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) -> None:
     """3 telas para rotas."""

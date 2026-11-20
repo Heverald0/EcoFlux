@@ -2,6 +2,7 @@ from pathlib import Path
 
 from nicegui import app, ui
 
+from api_client import ApiError, cadastrar_usuario, definir_sessao, fazer_login
 import pages  # noqa: F401  (registra as rotas das telas internas)
 
 
@@ -369,6 +370,15 @@ def login_page() -> None:
         if not email.value or not password.value:
             ui.notify('Preencha o e-mail e a senha.', type='warning')
             return
+
+        try:
+            sessao = fazer_login(email=email.value, senha=password.value)
+        except ApiError as exc:
+            ui.notify(exc.message, type='negative')
+            return
+
+        definir_sessao(sessao.token, email.value)
+        ui.notify('Login realizado com sucesso!', type='positive')
         ui.navigate.to('/dashboard')
 
     with ui.element('main').classes('login-page'):
@@ -434,6 +444,9 @@ def registration_page() -> None:
         if any(not field.value for field in required_fields):
             ui.notify('Preencha todos os campos obrigatórios.', type='warning')
             return
+        if len((name.value or '').strip()) < 3:
+            ui.notify('O nome deve ter pelo menos 3 caracteres.', type='warning')
+            return
         if password.value != password_confirmation.value:
             ui.notify('As senhas informadas não coincidem.', type='negative')
             return
@@ -443,7 +456,21 @@ def registration_page() -> None:
         if not terms.value:
             ui.notify('Você precisa aceitar os termos e a política de privacidade.', type='warning')
             return
-        ui.notify('Cadastro criado com sucesso!', type='positive')
+
+        try:
+            usuario = cadastrar_usuario(
+                nome=name.value,
+                email=email.value,
+                senha=password.value,
+            )
+        except ApiError as exc:
+            ui.notify(exc.message, type='negative')
+            return
+
+        ui.notify(
+            f'Cadastro criado com sucesso! Usuário: {usuario.nome} ({usuario.perfil})',
+            type='positive',
+        )
         ui.navigate.to('/dashboard')
 
     with ui.element('main').classes('login-page'):
@@ -539,6 +566,7 @@ def registration_page() -> None:
                         on_click=lambda: ui.navigate.to('/'),
                     ).props('flat dense no-caps').classes('signup-button')
 
+
 @ui.page('/recuperar-senha')
 def recovery_page() -> None:
     ui.colors(primary='#15703c')
@@ -596,4 +624,11 @@ def recovery_page() -> None:
                     ).props('flat dense no-caps').classes('signup-button')
 
 
-ui.run(title='EcoFlux', port=8080, reload=False, show=False, favicon='🌿')
+ui.run(
+    title='EcoFlux',
+    port=8550,
+    reload=False,
+    show=False,
+    favicon='🌿',
+    storage_secret='ecoflux-local-dev-secret',
+)
