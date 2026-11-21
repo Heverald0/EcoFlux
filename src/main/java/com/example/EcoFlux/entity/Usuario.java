@@ -1,6 +1,7 @@
 package com.example.EcoFlux.entity;
 
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
+import com.example.EcoFlux.entity.enums.StatusCadastro;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -33,12 +34,26 @@ public class Usuario implements UserDetails {
     @Column(nullable = false, unique = true, length = 150)
     private String email;
 
+    @Column(unique = true, length = 20)
+    private String documento;
+
+    @Column(length = 20)
+    private String telefone;
+
     @Column(name = "senha_hash", nullable = false)
     private String senha;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     private PerfilUsuario perfil;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 30)
+    @Builder.Default
+    private StatusCadastro status = StatusCadastro.ATIVO;
+
+    @Column(name = "motivo_rejeicao", length = 255)
+    private String motivoRejeicao;
 
     @CreationTimestamp
     @Column(name = "data_criacao", nullable = false, updatable = false)
@@ -54,13 +69,12 @@ public class Usuario implements UserDetails {
             return List.of(
                     new SimpleGrantedAuthority("ROLE_ADMINISTRADOR"),
                     new SimpleGrantedAuthority("ROLE_USUARIO"),
-                    new SimpleGrantedAuthority("ROLE_INSTITUICAO")
+                    new SimpleGrantedAuthority("ROLE_INSTITUICAO"),
+                    new SimpleGrantedAuthority("ROLE_EMPRESA"),
+                    new SimpleGrantedAuthority("ROLE_COOPERATIVA")
             );
         }
-        if (this.perfil == PerfilUsuario.INSTITUICAO) {
-            return List.of(new SimpleGrantedAuthority("ROLE_INSTITUICAO"));
-        }
-        return List.of(new SimpleGrantedAuthority("ROLE_USUARIO"));
+        return List.of(new SimpleGrantedAuthority("ROLE_" + this.perfil.name()));
     }
 
     @Override
@@ -80,7 +94,7 @@ public class Usuario implements UserDetails {
 
     @Override
     public boolean isAccountNonLocked() {
-        return true;
+        return this.status != StatusCadastro.REJEITADO && this.status != StatusCadastro.INATIVO;
     }
 
     @Override
@@ -90,6 +104,6 @@ public class Usuario implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return true;
+        return this.status == StatusCadastro.ATIVO;
     }
 }

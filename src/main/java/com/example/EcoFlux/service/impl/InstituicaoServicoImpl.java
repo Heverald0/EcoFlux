@@ -1,10 +1,13 @@
 package com.example.EcoFlux.service.impl;
 
+import com.example.EcoFlux.dto.request.AtualizarStatusCadastroRequisicao;
 import com.example.EcoFlux.dto.request.InstituicaoCadastroRequisicao;
 import com.example.EcoFlux.dto.request.response.InstituicaoResposta;
 import com.example.EcoFlux.entity.Instituicao;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
+import com.example.EcoFlux.entity.enums.StatusCadastro;
+import com.example.EcoFlux.entity.enums.TipoInstituicao;
 import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
 import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
@@ -36,6 +39,7 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
                 .nome(requisicao.nome().trim())
                 .documento(documentoLimpo)
                 .tipo(requisicao.tipo())
+                .status(StatusCadastro.AGUARDANDO_ANALISE)
                 .telefone(requisicao.telefone().trim())
                 .logradouro(requisicao.logradouro().trim())
                 .numero(requisicao.numero().trim())
@@ -67,6 +71,22 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
 
     @Override
     @Transactional(readOnly = true)
+    public List<InstituicaoResposta> listarComFiltros(TipoInstituicao tipo, StatusCadastro status) {
+        List<Instituicao> lista;
+        if (tipo != null && status != null) {
+            lista = instituicaoRepositorio.findAllByTipoAndStatusOrderByNomeAsc(tipo, status);
+        } else if (tipo != null) {
+            lista = instituicaoRepositorio.findAllByTipoOrderByNomeAsc(tipo);
+        } else if (status != null) {
+            lista = instituicaoRepositorio.findAllByStatusOrderByDataCriacaoDesc(status);
+        } else {
+            lista = instituicaoRepositorio.findAll();
+        }
+        return lista.stream().map(InstituicaoResposta::converter).toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public InstituicaoResposta buscarPorId(Long id, Usuario usuarioAutenticado) {
         Instituicao instituicao = instituicaoRepositorio.findById(id)
                 .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(String.format("Instituicao com ID %d nao encontrada.", id)));
@@ -79,5 +99,28 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
         }
 
         return InstituicaoResposta.converter(instituicao);
+    }
+
+    @Override
+    @Transactional
+    public InstituicaoResposta atualizarStatus(Long id, AtualizarStatusCadastroRequisicao requisicao, Usuario adminAutenticado) {
+        if (adminAutenticado.getPerfil() != PerfilUsuario.ADMINISTRADOR) {
+            throw new ExcecaoConflitoNegocio("Apenas administradores podem aprovar ou alterar o status de instituicoes.");
+        }
+
+        Instituicao instituicao = instituicaoRepositorio.findById(id)
+                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(String.format("Instituicao com ID %d nao encontrada.", id)));
+
+        if (requisicao.status() == StatusCadastro.REJEITADO
+                && (requisicao.motivo() == null || requisicao.motivo().isBlank())) {
+            throw new ExcecaoConflitoNegocio("Informe o motivo ao rejeitar o cadastro da instituicao.");
+        }
+
+        instituicao.setStatus(requisicao.status());
+        instituicao.setMotivoRejeicao(requisicao.status() == StatusCadastro.REJEITADO
+                ? requisicao.motivo().trim()
+                : null);
+
+        return InstituicaoResposta.converter(instituicaoRepositorio.save(instituicao));
     }
 }
