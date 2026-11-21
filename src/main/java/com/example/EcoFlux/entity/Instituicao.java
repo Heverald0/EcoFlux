@@ -1,5 +1,6 @@
 package com.example.EcoFlux.entity;
 
+import com.example.EcoFlux.entity.enums.StatusCadastro;
 import com.example.EcoFlux.entity.enums.TipoInstituicao;
 import jakarta.persistence.*;
 import lombok.*;
@@ -31,6 +32,14 @@ public class Instituicao {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     private TipoInstituicao tipo;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 30)
+    @Builder.Default
+    private StatusCadastro status = StatusCadastro.AGUARDANDO_ANALISE;
+
+    @Column(name = "motivo_rejeicao", length = 255)
+    private String motivoRejeicao;
 
     @Column(nullable = false, length = 20)
     private String telefone;

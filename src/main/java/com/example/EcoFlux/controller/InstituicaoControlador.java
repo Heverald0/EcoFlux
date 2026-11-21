@@ -1,8 +1,11 @@
 package com.example.EcoFlux.controller;
 
+import com.example.EcoFlux.dto.request.AtualizarStatusCadastroRequisicao;
 import com.example.EcoFlux.dto.request.InstituicaoCadastroRequisicao;
 import com.example.EcoFlux.dto.request.response.InstituicaoResposta;
 import com.example.EcoFlux.entity.Usuario;
+import com.example.EcoFlux.entity.enums.StatusCadastro;
+import com.example.EcoFlux.entity.enums.TipoInstituicao;
 import com.example.EcoFlux.service.InstituicaoServico;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -29,12 +32,19 @@ public class InstituicaoControlador {
         return ResponseEntity.status(HttpStatus.CREATED).body(resposta);
     }
 
+    @GetMapping
+    public ResponseEntity<List<InstituicaoResposta>> listar(
+            @RequestParam(required = false) TipoInstituicao tipo,
+            @RequestParam(required = false) StatusCadastro status
+    ) {
+        return ResponseEntity.ok(instituicaoServico.listarComFiltros(tipo, status));
+    }
+
     @GetMapping("/minhas")
     public ResponseEntity<List<InstituicaoResposta>> listarMinhasInstituicoes(
             @AuthenticationPrincipal Usuario usuarioAutenticado
     ) {
-        List<InstituicaoResposta> instituicoes = instituicaoServico.listarMinhasInstituicoes(usuarioAutenticado);
-        return ResponseEntity.ok(instituicoes);
+        return ResponseEntity.ok(instituicaoServico.listarMinhasInstituicoes(usuarioAutenticado));
     }
 
     @GetMapping("/{id}")
@@ -42,7 +52,15 @@ public class InstituicaoControlador {
             @PathVariable Long id,
             @AuthenticationPrincipal Usuario usuarioAutenticado
     ) {
-        InstituicaoResposta resposta = instituicaoServico.buscarPorId(id, usuarioAutenticado);
-        return ResponseEntity.ok(resposta);
+        return ResponseEntity.ok(instituicaoServico.buscarPorId(id, usuarioAutenticado));
+    }
+
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<InstituicaoResposta> atualizarStatus(
+            @PathVariable Long id,
+            @RequestBody @Valid AtualizarStatusCadastroRequisicao requisicao,
+            @AuthenticationPrincipal Usuario usuarioAutenticado
+    ) {
+        return ResponseEntity.ok(instituicaoServico.atualizarStatus(id, requisicao, usuarioAutenticado));
     }
 }
