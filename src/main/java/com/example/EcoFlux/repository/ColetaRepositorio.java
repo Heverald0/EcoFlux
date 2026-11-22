@@ -4,6 +4,8 @@ import com.example.EcoFlux.entity.Coleta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.StatusColeta;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -15,4 +17,14 @@ public interface ColetaRepositorio extends JpaRepository<Coleta, Long> {
     List<Coleta> findAllByUsuarioSolicitanteAndStatusOrderByDataHoraAgendamentoDesc(Usuario usuarioSolicitante, StatusColeta status);
     List<Coleta> findAllByStatusOrderByDataHoraAgendamentoAsc(StatusColeta status);
     Optional<Coleta> findByIdAndUsuarioSolicitante(Long id, Usuario usuarioSolicitante);
+
+    @Query("""
+        SELECT DISTINCT c FROM Coleta c
+        LEFT JOIN c.instituicao inst
+        LEFT JOIN c.cooperativa coop
+        WHERE c.usuarioSolicitante.id = :usuarioId
+           OR inst.usuarioResponsavel.id = :usuarioId
+           OR coop.usuarioResponsavel.id = :usuarioId
+    """)
+    List<Coleta> findAllRelacionadasAoUsuarioId(@Param("usuarioId") Long usuarioId);
 }
