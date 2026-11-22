@@ -24,7 +24,9 @@ from api_client import (
     atualizar_status_instituicao,
     atualizar_status_usuario,
     buscar_ecoimpacto_global,
+    buscar_material_por_codigo,
     buscar_meu_ecoimpacto,
+    buscar_meu_ecoscore,
     buscar_timeline_coleta,
     criar_ponto_coleta,
     eh_administrador,
@@ -32,11 +34,14 @@ from api_client import (
     listar_cooperativas,
     listar_ecoselos,
     listar_instituicoes,
+    listar_materiais,
     listar_meus_ecoselos,
     listar_minhas_coletas,
     listar_minhas_instituicoes,
     listar_pontos_coleta,
+    listar_ranking_ecoscore,
     listar_usuarios,
+    obter_nome_atual,
     obter_token,
 )
 import mocks as m
@@ -378,6 +383,21 @@ def _atualizar_kpi(base: m.Kpi, label: str, value: str) -> m.Kpi:
             if nome not in ('label', 'value'):
                 kwargs[nome] = getattr(base, nome)
         return m.Kpi(**kwargs)
+
+
+def _construir_rank_item(pos: int, name: str, value: str, pct: int) -> m.Metric:
+    """Cria um m.Metric compativel com rank_list (metric.label, metric.value, metric.pct)."""
+    return m.Metric(label=name, value=value, pct=pct)
+
+
+def _normalizar_nome_ranking(nome: str) -> str:
+    """Evita nomes totalmente minusculos no ranking sem alterar capitalizacao ja existente."""
+    limpo = (nome or '').strip()
+    if not limpo:
+        return limpo
+    if limpo.islower():
+        return limpo.title()
+    return limpo
 
 
 def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
@@ -800,45 +820,210 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
 
 
 def _montar_dados_ecoselo() -> dict[str, Any]:
-    """Busca selos reais na API (/api/v1/ecoselos/meus com fallback para /api/v1/ecoselos)."""
+    """Busca apenas selos reais vinculados ao usuário autenticado em /api/v1/ecoselos/meus."""
     selos: list[dict[str, Any]] = []
-    for fetcher in (listar_meus_ecoselos, listar_ecoselos):
-        try:
-            res = fetcher()
-            if isinstance(res, list) and res:
-                selos = res
-                break
-        except ApiError:
-            continue
+    try:
+        res = listar_meus_ecoselos()
+        if isinstance(res, list):
+            selos = res
+    except ApiError:
+        selos = []
 
-    kpis_out = list(m.KPIS_ECOSELO)
-    destaque = None
+    qtd_total = len(selos)
+    qtd_ouro = sum(
+        1 for s in selos
+        if 'OURO' in str(
+            s.get('nivel') or s.get('selo') or s.get('nome') or s.get('codigo') or ''
+        ).upper()
+    )
 
-    if selos:
-        qtd_total = len(selos)
-        qtd_ouro = sum(
-            1 for s in selos
-            if 'OURO' in str(s.get('nivel') or s.get('selo') or s.get('nome') or '').upper()
-        )
-        if len(kpis_out) >= 1:
-            kpis_out[0] = replace(
-                kpis_out[0],
-                value=_fmt_qtd_admin(qtd_total),
-                hint='selos cadastrados',
-            )
-        if len(kpis_out) >= 2:
-            kpis_out[1] = replace(
-                kpis_out[1],
-                value=_fmt_qtd_admin(qtd_ouro),
-                hint='nível ouro',
-            )
-        destaque = selos[0]
+    kpis_out = [
+        replace(
+            m.KPIS_ECOSELO[0],
+            label='SELOS CONQUISTADOS',
+            value=_fmt_qtd_admin(qtd_total),
+            hint='vinculados à sua conta' if qtd_total else 'nenhum selo conquistado',
+        ),
+        replace(
+            m.KPIS_ECOSELO[1],
+            label='SELO OURO',
+            value=_fmt_qtd_admin(qtd_ouro),
+            hint='nível ouro' if qtd_ouro else 'nenhum selo ouro',
+        ),
+        replace(
+            m.KPIS_ECOSELO[2],
+            label='ADERÊNCIA MÉDIA',
+            value='-',
+            hint='não fornecido pela API',
+        ),
+        replace(
+            m.KPIS_ECOSELO[3],
+            label='RENOVAÇÕES',
+            value='-',
+            hint='não fornecido pela API',
+        ),
+    ]
 
     return {
         'kpis': kpis_out,
         'selos': selos,
-        'destaque': destaque,
+        'destaque': selos[0] if selos else None,
     }
+
+
+def _montar_dados_ecoscore() -> dict[str, Any]:
+    """Busca EcoScore individual (/meu), ranking (/ranking) e materiais dos ultimos 5 meses."""
+    nome_usuario = obter_nome_atual() or 'Usuário'
+    meu_score: dict[str, Any] = {}
+    try:
+        meu_score = buscar_meu_ecoscore()
+    except ApiError:
+        meu_score = {}
+
+    pontos_num = int(round(float(
+        meu_score.get('pontuacaoTotal')
+        or meu_score.get('pontuacao')
+        or meu_score.get('pontos')
+        or meu_score.get('score')
+        or 0
+    )))
+    nome_exibicao = _normalizar_nome_ranking(str(
+        meu_score.get('nomeUsuario')
+        or meu_score.get('nomeInstituicao')
+        or meu_score.get('nome')
+        or nome_usuario
+    )) or nome_usuario
+
+    nivel_atual = str(
+        meu_score.get('nivel')
+        or meu_score.get('classificacao')
+        or meu_score.get('selo')
+        or ('Iniciante' if pontos_num == 0 else 'EcoSelo Ativo')
+    ).strip()
+
+    prox_meta = int(round(float(meu_score.get('proximaMetaPontos') or 0)))
+    faltam_pts = int(round(float(meu_score.get('pontosParaProximoNivel') or 0)))
+    if prox_meta > 0:
+        pct_score = max(0, min(100, int(round((pontos_num / prox_meta) * 100))))
+    else:
+        pct_score = max(0, min(100, int(round((pontos_num / 2000) * 100)))) if pontos_num > 0 else 0
+
+    if faltam_pts > 0:
+        meta_texto = f'+{faltam_pts} pts para o próximo nível'
+    elif meu_score:
+        meta_texto = f'{int(meu_score.get("totalColetasConcluidas") or 0)} coletas concluídas'
+    else:
+        meta_texto = 'Pontuação calculada conforme suas coletas concluídas'
+
+    ranking_bruto: list[dict[str, Any]] = []
+    try:
+        ranking_bruto = listar_ranking_ecoscore()
+    except ApiError:
+        ranking_bruto = []
+
+    ranking_itens: list[m.Metric] = []
+    if ranking_bruto:
+        def _pts_item(r: dict[str, Any]) -> float:
+            return float(
+                r.get('pontuacaoTotal')
+                or r.get('pontuacao')
+                or r.get('pontos')
+                or r.get('score')
+                or 0
+            )
+
+        ranking_ordenado = sorted(ranking_bruto, key=_pts_item, reverse=True)
+        max_pts = max((_pts_item(r) for r in ranking_ordenado), default=0.0)
+
+        for idx, r in enumerate(ranking_ordenado[:10], start=1):
+            pts_r = int(round(_pts_item(r)))
+            nome_r = _normalizar_nome_ranking(str(
+                r.get('nomeUsuario')
+                or r.get('nomeInstituicao')
+                or r.get('nome')
+                or f'Participante #{idx}'
+            ))
+            pct_r = int(round((pts_r / max_pts) * 100)) if max_pts > 0 else 0
+            ranking_itens.append(
+                _construir_rank_item(
+                    pos=idx,
+                    name=nome_r,
+                    value=_formatar_numero_pt(float(pts_r)),
+                    pct=pct_r,
+                )
+            )
+
+    coletas: list[dict[str, Any]] = []
+    try:
+        coletas = listar_coletas_operacional()
+    except ApiError:
+        try:
+            coletas = listar_minhas_coletas()
+        except ApiError:
+            coletas = []
+
+    janela_5_meses = _ultimos_5_meses_base_atual()
+    por_mes: dict[tuple[int, int], float] = {chave: 0.0 for chave in janela_5_meses}
+    tem_meses_reais = False
+
+    for c in coletas:
+        if str(c.get('status') or '').upper() == 'CANCELADA':
+            continue
+        kg = float(c.get('quantidadeEstimadaKg') or 0)
+        if kg <= 0:
+            continue
+        data_ref = str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
+        if len(data_ref) >= 7:
+            try:
+                dt = datetime.fromisoformat(data_ref.replace('Z', ''))
+                chave = (dt.year, dt.month)
+                if chave in por_mes:
+                    por_mes[chave] += kg
+                    tem_meses_reais = True
+            except ValueError:
+                pass
+
+    max_kg_mes = max(por_mes.values(), default=0.0)
+    meses_out = [
+        m.Bar(
+            label=_MESES_CURTOS[mes - 1],
+            pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
+        )
+        for ano, mes in janela_5_meses
+    ]
+
+    return {
+        'nome_exibicao': nome_exibicao,
+        'pontos_fmt': f'{_formatar_numero_pt(float(pontos_num))} pts',
+        'pct_score': pct_score,
+        'nivel': nivel_atual,
+        'meta_texto': meta_texto,
+        'ranking': ranking_itens,
+        'total_participantes': len(ranking_bruto),
+        'meses': meses_out,
+        'tem_meses_reais': tem_meses_reais,
+    }
+
+
+def _carregar_materiais_catalogo_api() -> list[dict[str, Any]]:
+    """Busca o catalogo completo em GET /api/v1/materiais com fallback para m.TIPOS_REGISTRO."""
+    try:
+        itens = listar_materiais()
+        if isinstance(itens, list) and itens:
+            return [item for item in itens if isinstance(item, dict)]
+    except ApiError:
+        pass
+
+    return [
+        {
+            'codigo': _normalizar_tipo_material_coleta(nome),
+            'nome': nome,
+            'descricao': '',
+            'unidadePadrao': 'L' if 'OLEO' in _normalizar_tipo_material_coleta(nome) else 'kg',
+            'fatorCarbonoEvitadoKg': None,
+        }
+        for nome in m.TIPOS_REGISTRO
+    ]
 
 
 @ui.page('/dashboard')
@@ -1349,10 +1534,67 @@ def materiais() -> None:
                     'Registro, rastreamento e situação de todos os resíduos processados')
         kpi_row(m.KPIS_MATERIAIS)
 
+        catalogo = _carregar_materiais_catalogo_api()
+        mapa_opcoes: dict[str, str] = {}
+        for item in catalogo:
+            cod = str(item.get('codigo') or '').strip().upper()
+            nome_mat = str(item.get('nome') or cod).strip()
+            if cod:
+                mapa_opcoes[cod] = nome_mat
+
+        codigo_inicial = next(iter(mapa_opcoes.keys()), 'PAPEL')
+        detalhe_box_ref: list[Any] = [None]
+
+        def _render_detalhe_material(detalhe: dict[str, Any], qtd_informada: float = 0.0) -> None:
+            if detalhe_box_ref[0] is None:
+                return
+            detalhe_box_ref[0].clear()
+            with detalhe_box_ref[0]:
+                cod = str(detalhe.get('codigo') or '').strip().upper()
+                nome_mat = str(detalhe.get('nome') or cod or 'Material').strip()
+                desc_mat = str(detalhe.get('descricao') or '').strip()
+                unid = str(detalhe.get('unidadePadrao') or 'kg').strip()
+                fator_raw = detalhe.get('fatorCarbonoEvitadoKg')
+
+                partes_meta: list[str] = [f'Código: {cod}', f'Unidade padrão: {unid}']
+                if fator_raw is not None:
+                    fator_num = float(fator_raw)
+                    partes_meta.append(
+                        f'Fator CO₂ evitado: {_formatar_numero_pt(fator_num)} kg/{unid}'
+                    )
+                    if qtd_informada > 0:
+                        co2_est = qtd_informada * fator_num
+                        partes_meta.append(
+                            f'Estimativa para {_formatar_numero_pt(qtd_informada)} {unid}: '
+                            f'{_formatar_numero_pt(co2_est)} kg CO₂e'
+                        )
+
+                desc_html = (
+                    f'<div class="muted" style="font-size:11px;margin-top:4px">{escape(desc_mat)}</div>'
+                    if desc_mat
+                    else ''
+                )
+                h(
+                    f'<div style="margin-top:14px;padding:12px 14px;border-radius:10px;'
+                    f'background:#F5F7F8;border:1px solid #E5E7EB">'
+                    f'<div style="font-size:13px;font-weight:600;color:{PRIMARY}">'
+                    f'{escape(nome_mat)}</div>'
+                    f'{desc_html}'
+                    f'<div style="font-size:11px;margin-top:6px">'
+                    f'{escape(" • ".join(partes_meta))}</div>'
+                    f'</div>'
+                )
+
         with card('Registrar entrada de material'):
             with ui.element('div').classes('form-grid cols-4'):
-                form_field('Tipo', options=m.TIPOS_REGISTRO, value=m.TIPOS_REGISTRO[0],
-                           upper=True)
+                with ui.element('div'):
+                    h('<label class="form-label upper">Tipo</label>')
+                    tipo_sel = ui.select(
+                        mapa_opcoes,
+                        value=codigo_inicial,
+                    ).props(
+                        'outlined dense hide-bottom-space options-dense aria-label="Tipo"'
+                    ).classes('eco-field')
                 peso = form_field('Peso/Litros', value='0,00', upper=True)
                 form_field('Volume', value='0,00', upper=True)
                 data = form_field('Data', upper=True, props='type=date')
@@ -1365,10 +1607,24 @@ def materiais() -> None:
                         ui.notify('Informe o peso ou o volume em litros.', type='warning')
                         return
                     if _obrigatorios(origem=origem, data=data):
-                        ui.notify('Entrada de material registrada!', type='positive')
+                        cod_escolhido = str(tipo_sel.value or codigo_inicial).strip().upper()
+                        try:
+                            qtd_num = float(str(peso.value or '0').replace(',', '.'))
+                        except ValueError:
+                            qtd_num = 0.0
+
+                        try:
+                            detalhe = buscar_material_por_codigo(cod_escolhido)
+                            _render_detalhe_material(detalhe, qtd_informada=qtd_num)
+                            nome_mat = str(detalhe.get('nome') or cod_escolhido)
+                            ui.notify(f'Material {nome_mat} consultado na API!', type='positive')
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='warning')
 
                 with ui.element('div').classes('cell-end'):
                     eco_button('REGISTRAR', registrar, cls='eco-block')
+
+            detalhe_box_ref[0] = ui.element('div').classes('w-full')
 
         with card('Últimos registros', more='Ver mais'):
             data_table(m.ULTIMOS_REGISTROS)
@@ -1379,39 +1635,62 @@ def ecoscore() -> None:
     with layout('/ecoscore'):
         page_header('EcoScore',
                     'Pontuação por descarte correto - acompanhe seu desempenho e evolua')
+        dados_es = _montar_dados_ecoscore()
 
         with grid('2'):
-            with card('Seu Score - Cond. Parque Verde'):
-                anel = donut([m.Slice('Score', m.SCORE_PCT, '#4ADE80'),
-                              m.Slice('Restante', 100 - m.SCORE_PCT, '#D9D9D9')],
+            with card(f'Seu Score - {dados_es["nome_exibicao"]}'):
+                pct_sc = dados_es['pct_score']
+                anel = donut([m.Slice('Score', pct_sc, '#4ADE80'),
+                              m.Slice('Restante', 100 - pct_sc, '#D9D9D9')],
                              size=72, thickness=22)
                 h(f'''<div style="display:flex;align-items:center;gap:20px;margin-bottom:18px">
                         {anel}
                         <div>
-                          <div style="font-size:18px;font-weight:600">{m.SCORE_PONTOS}</div>
-                          <div class="muted" style="font-size:8px">Cond. Parque Verde</div>
-                          <div class="badge b-gold" style="margin:6px 0">EcoSelo Ouro</div>
-                          <div class="muted" style="font-size:8px">
-                            +160 pts para Referência Sustentável</div>
+                          <div style="font-size:20px;font-weight:600">{escape(dados_es["pontos_fmt"])}</div>
+                          <div class="badge b-gold" style="margin:6px 0;font-size:11px">{escape(dados_es["nivel"])}</div>
+                          <div class="muted" style="font-size:11px">
+                            {escape(dados_es["meta_texto"])}</div>
                         </div>
                       </div>
-                      <div style="font-size:10px;margin-bottom:4px">Critérios de pontuação</div>''')
-                metric_list(m.CRITERIOS_PONTUACAO)
+                      <div style="font-size:12px;font-weight:500;margin-bottom:6px">Critérios de pontuação</div>''')
+                h('<div class="muted" style="font-size:12px;padding:6px 0">'
+                  'Detalhamento por critério não disponível na API no momento.</div>')
 
             with card():
+                meses_select = [
+                    f'{_MESES_CURTOS[mes - 1]} {ano}'
+                    for ano, mes in reversed(_ultimos_5_meses_base_atual())
+                ]
                 with ui.element('div').classes('card-head'):
                     titulo = h('<div class="card-title">Ranking geral</div>')
-                    mes = ui.select(m.MESES_RANKING, value=m.MESES_RANKING[0]).props(
+                    mes = ui.select(meses_select, value=meses_select[0]).props(
                         'outlined dense hide-bottom-space options-dense aria-label="Mês do ranking"'
                     ).classes('eco-field').style('width:150px')
                     titulo.bind_content_from(
                         mes, 'value', lambda v: f'<div class="card-title">Ranking geral - {v}</div>')
-                rank_list(m.RANKING_GERAL, divided=True, top_colored=2, green_value=True,
-                          footer='58 instituições participando este mês')
+                if dados_es['ranking']:
+                    total_p = dados_es['total_participantes']
+                    rodape_rank = (
+                        f'{total_p} participante{"s" if total_p != 1 else ""} no ranking'
+                    )
+                    rank_list(
+                        dados_es['ranking'],
+                        divided=True,
+                        top_colored=2,
+                        green_value=True,
+                        footer=rodape_rank,
+                    )
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhum participante pontuado no ranking até o momento.</div>')
 
         with ui.element('div').classes('narrow-45'):
             with card('Materiais coletados - 05 meses'):
-                bar_chart(m.MESES_5)
+                if dados_es['tem_meses_reais']:
+                    bar_chart(dados_es['meses'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma coleta com peso registrado nos últimos 5 meses até o momento.</div>')
 
 
 @ui.page('/ecoselo')
@@ -1430,17 +1709,19 @@ def ecoselo() -> None:
                         destaque.get('nome')
                         or destaque.get('titulo')
                         or destaque.get('nivel')
-                        or 'EcoSelo Ouro'
+                        or destaque.get('codigo')
+                        or 'EcoSelo'
                     )
                     entidade_selo = str(
                         destaque.get('instituicaoNome')
                         or destaque.get('nomeInstituicao')
-                        or 'Cond. Parque Verde'
+                        or destaque.get('descricao')
+                        or ''
                     )
                     validade_selo = str(
                         destaque.get('validade')
                         or destaque.get('dataValidade')
-                        or 'Validade: abril/2026 a abril/2027'
+                        or ''
                     )
                     h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
                                      gap:16px;margin-bottom:18px">
@@ -1453,37 +1734,28 @@ def ecoselo() -> None:
                             </div>
                             <div class="seal"><div class="seal-inner">Eco</div></div>
                           </div>''')
-                    progress_footer('Critérios atendidos', 92)
                 else:
-                    h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
-                                     gap:16px;margin-bottom:18px">
-                            <div>
-                              <div style="color:{PRIMARY};font-size:16px;font-weight:600">
-                                EcoSelo Ouro</div>
-                              <div style="font-size:12px;font-weight:500">Cond. Parque Verde</div>
-                              <div class="muted" style="font-size:11px;margin-top:14px">
-                                Validade: abril/2026 a abril/2027</div>
-                            </div>
-                            <div class="seal"><div class="seal-inner">Eco</div></div>
-                          </div>''')
-                    progress_footer('Critérios atendidos', 92)
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhum selo conquistado ou vinculado até o momento.</div>')
 
             with card('Painel de certificação'):
                 if dados_selo['selos']:
                     rows_selo: list[tuple] = []
                     for s in dados_selo['selos']:
                         nome_item = str(
-                            s.get('instituicaoNome')
-                            or s.get('nomeInstituicao')
-                            or s.get('nome')
+                            s.get('nome')
+                            or s.get('titulo')
+                            or s.get('instituicaoNome')
+                            or s.get('codigo')
                             or f"Selo #{s.get('id') or '-'}"
                         )
                         pts_item = str(s.get('pontuacao') or s.get('score') or '-')
                         nivel_item = str(s.get('nivel') or s.get('selo') or s.get('status') or 'Ativo')
                         rows_selo.append((nome_item, pts_item, m.Badge(nivel_item)))
-                    data_table(m.Table(columns=('Instituição', 'Score', 'Selo'), rows=rows_selo))
+                    data_table(m.Table(columns=('Selo / Instituição', 'Score', 'Status'), rows=rows_selo))
                 else:
-                    data_table(m.PAINEL_CERTIFICACAO)
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma certificação registrada até o momento.</div>')
 
         with grid('3'):
             with card('Critérios do selo', cls='card-sm'):

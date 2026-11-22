@@ -305,14 +305,15 @@ STYLES = '''
   .legend-row span:nth-child(2) { flex: 1; }
 
   /* --- listas --- */
-  .rank-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+  .rank-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
   .list-divided .rank-row + .rank-row, .list-divided .item + .item { border-top: 1px solid var(--line); }
-  .rank-num { width: 10px; color: var(--muted); font-size: 9px; }
+  .rank-num { width: 16px; color: var(--muted); font-size: 12px; font-weight: 500; }
   .rank-num.top { color: #E8892B; }
   .rank-body { min-width: 0; flex: 1; }
-  .rank-name { margin-bottom: 4px; font-size: 8px; }
-  .rank-value { width: 46px; font-size: 10px; text-align: right; }
+  .rank-name { margin-bottom: 5px; font-size: 13px; font-weight: 500; }
+  .rank-value { width: 52px; font-size: 13px; font-weight: 500; text-align: right; }
   .rank-value.green { color: var(--primary); }
+  .rank-footer { margin-top: 12px; font-size: 12px; }
   .metric-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 9px; }
   .metric-row .label { width: 30%; }
   .metric-row .value { width: 58px; text-align: right; }
@@ -794,8 +795,7 @@ def rank_list(metrics: Iterable[m.Metric], divided: bool = False, top_colored: i
             f'<span class="rank-value{" green" if green_value else ""}">'
             f'{escape(metric.value)}</span></div>'
         )
-    note = f'<div class="muted" style="margin-top:10px;font-size:8px">{escape(footer)}</div>' \
-        if footer else ''
+    note = f'<div class="muted rank-footer">{escape(footer)}</div>' if footer else ''
     h(f'<div class="{"list-divided" if divided else ""}">{"".join(rows)}</div>{note}')
 
 

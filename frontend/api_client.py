@@ -299,6 +299,45 @@ def _auth_headers_obrigatorio() -> dict[str, str]:
     return auth_headers(token)
 
 
+def listar_materiais() -> list[dict[str, Any]]:
+    """GET /api/v1/materiais para listar os tipos de materiais disponíveis."""
+    headers = auth_headers(obter_token() or '') if obter_token() else None
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get('/api/v1/materiais', headers=headers)
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar materiais (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def buscar_material_por_codigo(codigo: str) -> dict[str, Any]:
+    """GET /api/v1/materiais/{codigo} para buscar um material pelo código."""
+    cod_limpo = (codigo or '').strip().upper()
+    headers = auth_headers(obter_token() or '') if obter_token() else None
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(f'/api/v1/materiais/{cod_limpo}', headers=headers)
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao buscar material (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
+
+
 def listar_usuarios(status: str | None = None) -> list[dict[str, Any]]:
     """GET /api/v1/usuarios (opcionalmente filtrado por StatusCadastro)."""
     params: dict[str, str] = {}
@@ -845,6 +884,48 @@ def listar_ecoselos() -> list[dict[str, Any]]:
     if resp.status_code != 200:
         raise ApiError(
             _extrair_erro(resp, f'Erro ao listar EcoSelos (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def buscar_meu_ecoscore() -> dict[str, Any]:
+    """GET /api/v1/ecoscore/meu para obter a pontuação do usuário autenticado."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/ecoscore/meu',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao consultar meu EcoScore (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
+
+
+def listar_ranking_ecoscore() -> list[dict[str, Any]]:
+    """GET /api/v1/ecoscore/ranking para obter o ranking geral de EcoScore."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/ecoscore/ranking',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao consultar ranking EcoScore (HTTP {resp.status_code}).'),
             status_code=resp.status_code,
         )
 
