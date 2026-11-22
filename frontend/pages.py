@@ -23,11 +23,16 @@ from api_client import (
     atualizar_status_cooperativa,
     atualizar_status_instituicao,
     atualizar_status_usuario,
+    buscar_ecoimpacto_global,
+    buscar_meu_ecoimpacto,
     buscar_timeline_coleta,
     criar_ponto_coleta,
     eh_administrador,
+    listar_coletas_operacional,
     listar_cooperativas,
+    listar_ecoselos,
     listar_instituicoes,
+    listar_meus_ecoselos,
     listar_minhas_coletas,
     listar_minhas_instituicoes,
     listar_pontos_coleta,
@@ -72,6 +77,17 @@ _ENUM_PARA_CHIP = {
     'OLEO': 'Óleo',
     'MISTO': 'Misto',
 }
+
+_CORES_DONUT_MATERIAL = [
+    PRIMARY,
+    '#4ADE80',
+    '#DBEAFE',
+    '#FEF3C7',
+    '#FDE2E4',
+    '#A7F3D0',
+    '#BFDBFE',
+    '#FDE68A',
+]
 
 _LABEL_STATUS_PONTO = {
     'ATIVO': 'Ativo',
@@ -542,6 +558,287 @@ def _montar_kpis_admin() -> list[m.Kpi]:
         )
 
     return kpis_admin
+
+
+def _formatar_co2_kpi(co2_kg: float) -> str:
+    if co2_kg >= 1000:
+        return f'{_formatar_numero_pt(round(co2_kg / 1000, 1))} t'
+    return f'{_formatar_numero_pt(round(co2_kg, 1))} kg'
+
+
+def _formatar_agua_kpi(litros: float) -> str:
+    if litros >= 1000:
+        return f'{_formatar_numero_pt(round(litros / 1000, 1))} mil L'
+    return f'{_formatar_numero_pt(round(litros, 1))} L'
+
+
+def _formatar_energia_kpi(kwh: float) -> str:
+    if kwh >= 1000:
+        return f'{_formatar_numero_pt(round(kwh / 1000, 1))} MWh'
+    return f'{_formatar_numero_pt(round(kwh, 1))} kWh'
+
+
+def _ultimos_5_meses_base_atual() -> list[tuple[int, int]]:
+    """Retorna os 5 meses encerrando no mes/ano atual em ordem cronologica."""
+    hoje = datetime.now().date()
+    ano = hoje.year
+    mes = hoje.month
+    meses: list[tuple[int, int]] = []
+    for _ in range(5):
+        meses.append((ano, mes))
+        mes -= 1
+        if mes < 1:
+            mes = 12
+            ano -= 1
+    meses.reverse()
+    return meses
+
+
+def _montar_dados_ecoimpacto() -> dict[str, Any]:
+    """Busca dados reais de EcoImpacto, coletas e instituicoes sem mascarar ausencia de dados."""
+    kpis_out = list(m.KPIS_ECOIMPACTO)
+    slices_out: list[m.Slice] = []
+    tem_meses_reais = False
+    equivalencias_out = [
+        m.Item(title='0 kg', meta='de CO2 evitadas', tone='green'),
+        m.Item(title='0 kg', meta='fora de aterros', tone='blue'),
+        m.Item(title='0', meta='coletas concluídas', tone='amber'),
+    ]
+    impacto_inst_out: list[m.Metric] = []
+
+    dados: dict[str, Any] | None = None
+    for fetcher in (buscar_ecoimpacto_global, buscar_meu_ecoimpacto):
+        try:
+            res = fetcher()
+            if isinstance(res, dict) and res:
+                dados = res
+                break
+        except ApiError:
+            continue
+
+    coletas: list[dict[str, Any]] = []
+    try:
+        coletas = listar_coletas_operacional()
+    except ApiError:
+        try:
+            coletas = listar_minhas_coletas()
+        except ApiError:
+            coletas = []
+
+    instituicoes_mapa: dict[int, str] = {}
+    try:
+        for inst in listar_instituicoes() + listar_cooperativas():
+            if inst.get('id') is not None:
+                instituicoes_mapa[int(inst['id'])] = str(
+                    inst.get('nome') or f"Instituição #{inst['id']}"
+                )
+    except ApiError:
+        instituicoes_mapa = {}
+
+    if dados:
+        co2_kg = float(dados.get('co2EvitadoKg') or 0)
+        arvores = float(dados.get('arvoresPreservadasEquivalentes') or 0)
+        agua_l = float(dados.get('aguaEconomizadaLitros') or 0)
+        energia_kwh = float(dados.get('energiaEconomizadaKwh') or 0)
+        total_kg = float(dados.get('totalResiduosRecicladosKg') or 0)
+        total_coletas = int(dados.get('totalColetasConcluidas') or 0)
+
+        hint_co2 = (
+            f'{total_coletas} coleta{"s" if total_coletas != 1 else ""} concluída{"s" if total_coletas != 1 else ""}'
+            if co2_kg > 0 or total_coletas > 0
+            else 'sem registro no período'
+        )
+        hint_agua = (
+            f'{_formatar_numero_pt(round(total_kg, 1))} kg reciclados'
+            if agua_l > 0 or total_kg > 0
+            else 'sem economia no período'
+        )
+
+        if len(kpis_out) >= 1:
+            kpis_out[0] = replace(
+                kpis_out[0],
+                label='CO2 EVITADO',
+                value=_formatar_co2_kpi(co2_kg),
+                hint=hint_co2,
+            )
+        if len(kpis_out) >= 2:
+            kpis_out[1] = replace(
+                kpis_out[1],
+                label='ÁRVORES PRESERVADAS',
+                value=_formatar_numero_pt(arvores),
+                hint='equivalência estimada',
+            )
+        if len(kpis_out) >= 3:
+            kpis_out[2] = replace(
+                kpis_out[2],
+                label='ÁGUA ECONOMIZADA',
+                value=_formatar_agua_kpi(agua_l),
+                hint=hint_agua,
+            )
+        if len(kpis_out) >= 4:
+            kpis_out[3] = replace(
+                kpis_out[3],
+                label='ENERGIA POUPADA',
+                value=_formatar_energia_kpi(energia_kwh),
+                hint='por reciclagem',
+            )
+
+        detalhes = dados.get('detalhamentoPorMaterial')
+        if isinstance(detalhes, list) and detalhes:
+            pesos = [float(item.get('pesoTotalKg') or 0) for item in detalhes]
+            soma_pesos = sum(pesos)
+            if soma_pesos <= 0:
+                pesos = [float(item.get('co2EvitadoKg') or 0) for item in detalhes]
+                soma_pesos = sum(pesos)
+
+            if soma_pesos > 0:
+                novas_slices: list[m.Slice] = []
+                pcts_brutos: list[int] = []
+                for item, val in zip(detalhes, pesos):
+                    cod = str(item.get('codigoMaterial') or '').upper()
+                    nome_mat = (
+                        str(item.get('nomeMaterial') or '').strip()
+                        or _ENUM_PARA_CHIP.get(cod, cod.capitalize() or 'Material')
+                    )
+                    pct_val = int(round((max(val, 0.0) / soma_pesos) * 100))
+                    pcts_brutos.append(pct_val)
+                    novas_slices.append(
+                        m.Slice(
+                            label=nome_mat,
+                            pct=pct_val,
+                            color=_CORES_DONUT_MATERIAL[len(novas_slices) % len(_CORES_DONUT_MATERIAL)],
+                        )
+                    )
+
+                diff = 100 - sum(pcts_brutos)
+                if novas_slices and diff != 0:
+                    idx_maior = max(range(len(novas_slices)), key=lambda i: novas_slices[i].pct)
+                    novas_slices[idx_maior] = replace(
+                        novas_slices[idx_maior],
+                        pct=max(0, novas_slices[idx_maior].pct + diff),
+                    )
+                slices_out = [s for s in novas_slices if s.pct > 0]
+
+        equivalencias_out = [
+            m.Item(
+                title=_formatar_co2_kpi(co2_kg),
+                meta='de CO2 evitadas',
+                tone='green',
+            ),
+            m.Item(
+                title=_formatar_co2_kpi(total_kg),
+                meta='fora de aterros',
+                tone='blue',
+            ),
+            m.Item(
+                title=str(total_coletas),
+                meta='coletas concluídas',
+                tone='amber',
+            ),
+        ]
+
+    janela_5_meses = _ultimos_5_meses_base_atual()
+    por_mes: dict[tuple[int, int], float] = {chave: 0.0 for chave in janela_5_meses}
+    por_inst: dict[str, float] = {}
+
+    for c in coletas:
+        st = str(c.get('status') or '').upper()
+        if st == 'CANCELADA':
+            continue
+        kg = float(c.get('quantidadeEstimadaKg') or 0)
+        if kg <= 0:
+            continue
+
+        data_ref = str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
+        if len(data_ref) >= 7:
+            try:
+                dt = datetime.fromisoformat(data_ref.replace('Z', ''))
+                chave_mes = (dt.year, dt.month)
+                if chave_mes in por_mes:
+                    por_mes[chave_mes] += kg
+                    tem_meses_reais = True
+            except ValueError:
+                pass
+
+        inst_id = c.get('instituicaoId')
+        if inst_id is not None and int(inst_id) in instituicoes_mapa:
+            nome_inst = instituicoes_mapa[int(inst_id)]
+        else:
+            nome_inst = str(c.get('bairro') or '').strip() or 'Solicitação avulsa'
+        por_inst[nome_inst] = por_inst.get(nome_inst, 0.0) + kg
+
+    max_kg_mes = max(por_mes.values(), default=0.0)
+    meses_out = [
+        m.Bar(
+            label=_MESES_CURTOS[mes - 1],
+            pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
+        )
+        for ano, mes in janela_5_meses
+    ]
+
+    if por_inst:
+        top_inst = sorted(por_inst.items(), key=lambda x: x[1], reverse=True)[:4]
+        max_kg_inst = max((v for _, v in top_inst), default=0.0)
+        if max_kg_inst > 0:
+            impacto_inst_out = [
+                m.Metric(
+                    label=nome_i,
+                    value=_formatar_co2_kpi(kg_i),
+                    pct=max(10, int(round((kg_i / max_kg_inst) * 100))),
+                )
+                for nome_i, kg_i in top_inst
+            ]
+
+    return {
+        'kpis': kpis_out,
+        'slices': slices_out,
+        'meses': meses_out,
+        'tem_meses_reais': tem_meses_reais,
+        'equivalencias': equivalencias_out,
+        'impacto_inst': impacto_inst_out,
+    }
+
+
+def _montar_dados_ecoselo() -> dict[str, Any]:
+    """Busca selos reais na API (/api/v1/ecoselos/meus com fallback para /api/v1/ecoselos)."""
+    selos: list[dict[str, Any]] = []
+    for fetcher in (listar_meus_ecoselos, listar_ecoselos):
+        try:
+            res = fetcher()
+            if isinstance(res, list) and res:
+                selos = res
+                break
+        except ApiError:
+            continue
+
+    kpis_out = list(m.KPIS_ECOSELO)
+    destaque = None
+
+    if selos:
+        qtd_total = len(selos)
+        qtd_ouro = sum(
+            1 for s in selos
+            if 'OURO' in str(s.get('nivel') or s.get('selo') or s.get('nome') or '').upper()
+        )
+        if len(kpis_out) >= 1:
+            kpis_out[0] = replace(
+                kpis_out[0],
+                value=_fmt_qtd_admin(qtd_total),
+                hint='selos cadastrados',
+            )
+        if len(kpis_out) >= 2:
+            kpis_out[1] = replace(
+                kpis_out[1],
+                value=_fmt_qtd_admin(qtd_ouro),
+                hint='nível ouro',
+            )
+        destaque = selos[0]
+
+    return {
+        'kpis': kpis_out,
+        'selos': selos,
+        'destaque': destaque,
+    }
 
 
 @ui.page('/dashboard')
@@ -1122,25 +1419,71 @@ def ecoselo() -> None:
     with layout('/ecoselo'):
         page_header('Certificação ambiental',
                     'Selos de desempenho para reconhecer instituições sustentáveis')
-        kpi_row(m.KPIS_ECOSELO)
+        dados_selo = _montar_dados_ecoselo()
+        kpi_row(dados_selo['kpis'])
 
         with grid('2'):
             with card():
-                h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
-                                 gap:16px;margin-bottom:18px">
-                        <div>
-                          <div style="color:{PRIMARY};font-size:16px;font-weight:600">
-                            EcoSelo Ouro</div>
-                          <div style="font-size:12px;font-weight:500">Cond. Parque Verde</div>
-                          <div class="muted" style="font-size:11px;margin-top:14px">
-                            Validade: abril/2026 a abril/2027</div>
-                        </div>
-                        <div class="seal"><div class="seal-inner">Eco</div></div>
-                      </div>''')
-                progress_footer('Critérios atendidos', 92)
+                destaque = dados_selo['destaque']
+                if destaque:
+                    nome_selo = str(
+                        destaque.get('nome')
+                        or destaque.get('titulo')
+                        or destaque.get('nivel')
+                        or 'EcoSelo Ouro'
+                    )
+                    entidade_selo = str(
+                        destaque.get('instituicaoNome')
+                        or destaque.get('nomeInstituicao')
+                        or 'Cond. Parque Verde'
+                    )
+                    validade_selo = str(
+                        destaque.get('validade')
+                        or destaque.get('dataValidade')
+                        or 'Validade: abril/2026 a abril/2027'
+                    )
+                    h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
+                                     gap:16px;margin-bottom:18px">
+                            <div>
+                              <div style="color:{PRIMARY};font-size:16px;font-weight:600">
+                                {escape(nome_selo)}</div>
+                              <div style="font-size:12px;font-weight:500">{escape(entidade_selo)}</div>
+                              <div class="muted" style="font-size:11px;margin-top:14px">
+                                {escape(validade_selo)}</div>
+                            </div>
+                            <div class="seal"><div class="seal-inner">Eco</div></div>
+                          </div>''')
+                    progress_footer('Critérios atendidos', 92)
+                else:
+                    h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
+                                     gap:16px;margin-bottom:18px">
+                            <div>
+                              <div style="color:{PRIMARY};font-size:16px;font-weight:600">
+                                EcoSelo Ouro</div>
+                              <div style="font-size:12px;font-weight:500">Cond. Parque Verde</div>
+                              <div class="muted" style="font-size:11px;margin-top:14px">
+                                Validade: abril/2026 a abril/2027</div>
+                            </div>
+                            <div class="seal"><div class="seal-inner">Eco</div></div>
+                          </div>''')
+                    progress_footer('Critérios atendidos', 92)
 
             with card('Painel de certificação'):
-                data_table(m.PAINEL_CERTIFICACAO)
+                if dados_selo['selos']:
+                    rows_selo: list[tuple] = []
+                    for s in dados_selo['selos']:
+                        nome_item = str(
+                            s.get('instituicaoNome')
+                            or s.get('nomeInstituicao')
+                            or s.get('nome')
+                            or f"Selo #{s.get('id') or '-'}"
+                        )
+                        pts_item = str(s.get('pontuacao') or s.get('score') or '-')
+                        nivel_item = str(s.get('nivel') or s.get('selo') or s.get('status') or 'Ativo')
+                        rows_selo.append((nome_item, pts_item, m.Badge(nivel_item)))
+                    data_table(m.Table(columns=('Instituição', 'Score', 'Selo'), rows=rows_selo))
+                else:
+                    data_table(m.PAINEL_CERTIFICACAO)
 
         with grid('3'):
             with card('Critérios do selo', cls='card-sm'):
@@ -1156,22 +1499,37 @@ def ecoimpacto() -> None:
     with layout('/ecoimpacto'):
         page_header('Impacto ambiental',
                     'Indicadores de CO2, economia de recursos e resultados sustentáveis')
-        kpi_row(m.KPIS_ECOIMPACTO)
+        dados_ei = _montar_dados_ecoimpacto()
+        kpi_row(dados_ei['kpis'])
 
         with grid('2'):
-            with card('Evolução de impacto - 05 meses',
-                      subtitle='CO₂ evitado, água e energia poupada em escala agregada'):
-                bar_chart(m.MESES_IMPACTO)
+            with card('Evolução de impacto - 05 meses'):
+                h('<div class="muted" style="font-size:12px;margin:-4px 0 10px">'
+                  'CO₂ evitado, água e energia poupada em escala agregada</div>')
+                if dados_ei['tem_meses_reais']:
+                    bar_chart(dados_ei['meses'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma coleta com peso registrado nos últimos 5 meses até o momento.</div>')
             with card('Distribuição por material'):
-                donut_with_legend(m.DISTRIBUICAO_MATERIAL)
+                if dados_ei['slices']:
+                    donut_with_legend(dados_ei['slices'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhum material reciclado registrado até o momento.</div>')
 
         with grid('3'):
             with card('Metas ESG', cls='card-sm'):
-                stacked_metric_list(m.METAS_ESG)
+                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                  'Nenhuma meta ESG configurada no sistema até o momento.</div>')
             with card('Equivalências ambientais', cls='card-sm'):
-                item_list(m.EQUIVALENCIAS, big_title=True)
+                item_list(dados_ei['equivalencias'], big_title=True)
             with card('Impacto por instituição', cls='card-sm'):
-                metric_list(m.IMPACTO_INSTITUICAO)
+                if dados_ei['impacto_inst']:
+                    metric_list(dados_ei['impacto_inst'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhum impacto por instituição registrado até o momento.</div>')
 
 
 @ui.page('/relatorios')
