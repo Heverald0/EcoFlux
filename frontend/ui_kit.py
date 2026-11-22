@@ -13,6 +13,12 @@ from typing import Callable, Iterable
 
 from nicegui import ui
 
+from api_client import (
+    eh_administrador,
+    limpar_sessao,
+    obter_nome_atual,
+    obter_perfil_atual,
+)
 import mocks as m
 
 PRIMARY = '#1F8A43'
@@ -553,7 +559,25 @@ def bar_html(pct: int, light: bool = False, width: str = '') -> str:
 
 
 # --- layout ------------------------------------------------------------------
+def _rotulo_perfil_sessao() -> str:
+    perfil = (obter_perfil_atual() or '').strip().upper()
+    mapa = {
+        'ADMINISTRADOR': 'administrador',
+        'INSTITUICAO': 'instituição',
+        'EMPRESA': 'empresa',
+        'COOPERATIVA': 'cooperativa',
+        'USUARIO': 'usuário',
+    }
+    if not perfil:
+        return 'sessão ativa'
+    return mapa.get(perfil, perfil.lower())
+
+
 def sidebar_html(route: str) -> str:
+    is_admin = eh_administrador()
+    nome_usuario = obter_nome_atual() or 'Usuário'
+    rotulo_perfil = _rotulo_perfil_sessao()
+
     groups = []
     for title, items in NAV:
         links = ''.join(
@@ -563,27 +587,40 @@ def sidebar_html(route: str) -> str:
             for label, href, ico in items
         )
         groups.append(f'<div class="nav-group"><div class="nav-title">{title}</div>{links}</div>')
-    current = ' aria-current="page"' if route == '/administracao' else ''
+
+    footer_html = ''
+    if is_admin:
+        current = ' aria-current="page"' if route == '/administracao' else ''
+        footer_html = f'''
+          <div class="sidebar-footer">
+            <a class="user-card" href="/administracao"{current}>
+              <span class="avatar">{icon('eco')}</span>
+              <span>
+                <span class="user-name">{escape(nome_usuario)}</span><br>
+                <span class="user-role">{escape(rotulo_perfil)}</span>
+              </span>
+            </a>
+          </div>
+        '''
+
     return f'''
       <aside class="sidebar">
         <div class="brand">{icon('eco')}EcoFlux</div>
         {''.join(groups)}
-        <div class="sidebar-footer">
-          <a class="user-card" href="/administracao"{current}>
-            <span class="avatar">{icon('eco')}</span>
-            <span>
-              <span class="user-name">{m.USER_NAME}</span><br>
-              <span class="user-role">{m.USER_ROLE}</span>
-            </span>
-          </a>
-        </div>
+        {footer_html}
       </aside>
     '''
+
+
+def _sair_para_inicio() -> None:
+    limpar_sessao()
+    ui.navigate.to('/')
 
 
 @contextmanager
 def layout(route: str):
     """Sidebar + topbar + area de conteudo; o corpo da pagina entra no `with`."""
+    is_admin = eh_administrador()
     ui.colors(primary=PRIMARY)
     ui.page_title(f'EcoFlux | {TITLES[route]}')
     ui.add_head_html(STYLES, shared=True)
@@ -606,10 +643,13 @@ def layout(route: str):
                         h(icon('eco'))
                         with ui.menu():
                             ui.menu_item('Perfil', lambda: ui.navigate.to('/dashboard'))
-                            ui.menu_item('Administração',
-                                         lambda: ui.navigate.to('/administracao'))
+                            if is_admin:
+                                ui.menu_item(
+                                    'Administração',
+                                    lambda: ui.navigate.to('/administracao'),
+                                )
                             ui.separator()
-                            ui.menu_item('Sair', lambda: ui.navigate.to('/'))
+                            ui.menu_item('Sair', _sair_para_inicio)
             with ui.element('main').classes('content') as content:
                 yield content
 
@@ -682,7 +722,6 @@ def data_table(
                     on_click=lambda i=idx, r=row: on_action(i, r),
                     color=None,
                 ).props('flat dense no-caps').classes('btn-ghost')
-                # Move o botao real do Quasar para dentro da celula .act da linha idx
                 btn.move(wrap)
                 ui.run_javascript(
                     f'''
@@ -892,6 +931,7 @@ def chip_select(options: list[str], selected: Iterable[str]) -> set[str]:
             ).classes(f'chip{" on" if on else ""}')
             button.on_click(lambda o=option, b=button: toggle(o, b))
     return chosen
+
 
 def route_map_html() -> None:
     h('''

@@ -20,11 +20,19 @@ from api_client import (
     alterar_status_ponto_coleta,
     atualizar_ponto_coleta,
     atualizar_status_coleta,
+    atualizar_status_cooperativa,
+    atualizar_status_instituicao,
+    atualizar_status_usuario,
     buscar_timeline_coleta,
     criar_ponto_coleta,
+    eh_administrador,
+    listar_cooperativas,
+    listar_instituicoes,
     listar_minhas_coletas,
     listar_minhas_instituicoes,
     listar_pontos_coleta,
+    listar_usuarios,
+    obter_token,
 )
 import mocks as m
 from ui_kit import (
@@ -104,6 +112,21 @@ _TIPOS_INSTITUICAO_OPCOES = {
     'EMPRESA': 'Empresa',
     'CONDOMINIO': 'Condomínio',
     'COOPERATIVA': 'Cooperativa',
+}
+
+_PERFIL_LABEL = {
+    'USUARIO': 'Usuário',
+    'INSTITUICAO': 'Condomínio / Instituição',
+    'EMPRESA': 'Empresa',
+    'COOPERATIVA': 'Cooperativa',
+    'ADMINISTRADOR': 'Administrador',
+}
+
+_STATUS_CADASTRO_OPCOES = {
+    'ATIVO': 'Aprovado (Ativo)',
+    'AGUARDANDO_ANALISE': 'Aguardando análise',
+    'REJEITADO': 'Rejeitado',
+    'INATIVO': 'Inativo',
 }
 
 _MESES_CURTOS = ('Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez')
@@ -190,24 +213,6 @@ def _montar_payload_ponto(
         'longitude': -39.5808,
         'materiaisAceitos': materiais_enum,
     }
-
-
-def _converter_instituicoes_para_tabela(instituicoes: list[dict[str, Any]]) -> m.Table:
-    rows: list[tuple] = []
-    for inst in instituicoes:
-        nome = str(inst.get('nome') or '-')
-        tipo_raw = str(inst.get('tipo') or '').upper()
-        tipo_lbl = _TIPOS_INSTITUICAO_OPCOES.get(tipo_raw, tipo_raw.capitalize() or '-')
-        doc = str(inst.get('documento') or '-')
-        bairro = str(inst.get('bairro') or '').strip()
-        cidade = str(inst.get('cidade') or '').strip()
-        local = f'{bairro} - {cidade}' if (bairro and cidade) else (bairro or cidade or '-')
-        rows.append((nome, tipo_lbl, doc, local))
-
-    return m.Table(
-        columns=('Instituição', 'Tipo', 'Documento', 'Bairro / Cidade'),
-        rows=rows,
-    )
 
 
 def _converter_pontos_para_tabela(pontos: list[dict[str, Any]]) -> m.Table:
@@ -452,6 +457,91 @@ def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
         tabela_recentes = m.SOLICITACOES_RECENTES
 
     return kpis_base, tabela_recentes
+
+
+def _fmt_qtd_admin(qtd: int) -> str:
+    if qtd < 10:
+        return f'{qtd:02d}'
+    return _formatar_numero_pt(float(qtd))
+
+
+def _montar_kpis_admin() -> list[m.Kpi]:
+    """Consulta usuarios, instituicoes e cooperativas reais para os KPIs de /administracao."""
+    kpis_admin = list(m.KPIS_ADMIN)
+
+    try:
+        usuarios = listar_usuarios()
+        ativos = [u for u in usuarios if str(u.get('status') or '').upper() == 'ATIVO']
+        pendentes = [u for u in usuarios if str(u.get('status') or '').upper() == 'AGUARDANDO_ANALISE']
+        hint_u = (
+            f'{len(pendentes)} aguardando análise'
+            if pendentes
+            else f'{len(usuarios)} cadastrados no total'
+        )
+        if len(kpis_admin) >= 1:
+            kpis_admin[0] = replace(
+                kpis_admin[0],
+                label='USUÁRIOS ATIVOS',
+                value=_fmt_qtd_admin(len(ativos)),
+                hint=hint_u,
+            )
+    except ApiError:
+        pass
+
+    try:
+        instituicoes = listar_instituicoes()
+        somente_inst = [
+            i for i in instituicoes
+            if str(i.get('tipo') or '').upper() != 'COOPERATIVA'
+        ]
+        inst_pend = [
+            i for i in somente_inst
+            if str(i.get('status') or '').upper() == 'AGUARDANDO_ANALISE'
+        ]
+        inst_ativas = [
+            i for i in somente_inst
+            if str(i.get('status') or '').upper() == 'ATIVO'
+        ]
+        hint_i = (
+            f'{len(inst_pend)} aguardando análise'
+            if inst_pend
+            else f'{len(inst_ativas)} ativas'
+        )
+        if len(kpis_admin) >= 2:
+            kpis_admin[1] = replace(
+                kpis_admin[1],
+                label='INSTITUIÇÕES',
+                value=_fmt_qtd_admin(len(somente_inst)),
+                hint=hint_i,
+            )
+    except ApiError:
+        pass
+
+    try:
+        cooperativas = listar_cooperativas()
+        coop_ativas = [
+            c for c in cooperativas
+            if str(c.get('status') or '').upper() == 'ATIVO'
+        ]
+        if len(kpis_admin) >= 3:
+            kpis_admin[2] = replace(
+                kpis_admin[2],
+                label='COOPERATIVAS',
+                value=_fmt_qtd_admin(len(cooperativas)),
+                hint=f'{len(coop_ativas)} ativas',
+            )
+    except ApiError:
+        pass
+
+    if len(kpis_admin) >= 4:
+        kpis_admin[3] = replace(
+            kpis_admin[3],
+            label='PERMISSÕES',
+            value='05',
+            hint='perfis configurados',
+        )
+
+    return kpis_admin
 
 
 @ui.page('/dashboard')
@@ -1179,42 +1269,354 @@ def area_educativa() -> None:
 
 @ui.page('/administracao')
 def administracao() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    if not eh_administrador():
+        ui.notify('Acesso restrito: apenas administradores podem acessar /administracao.', type='negative')
+        ui.navigate.to('/dashboard')
+        return
+
     with layout('/administracao'):
         page_header('Usuários e instituições',
-                    'Controle de perfis, permissões e cadastro institucional')
-        kpi_row(m.KPIS_ADMIN)
+                    'Controle de perfis, permissões e aprovação de cadastros')
+
+        kpis_container = ui.element('div').classes('w-full')
+
+        def atualizar_kpis_admin() -> None:
+            kpis_container.clear()
+            with kpis_container:
+                kpi_row(_montar_kpis_admin())
+
+        atualizar_kpis_admin()
+
+        dialog_analise = ui.dialog()
+        dialog_editar_entidade = ui.dialog()
+        dialog_excluir_entidade = ui.dialog()
+        carregar_pendentes_ref: list[Any] = [None]
+        carregar_listas_ref: list[Any] = [None]
+        inst_box_ref: list[Any] = [None]
+        coop_box_ref: list[Any] = [None]
+
+        def abrir_modal_editar_entidade(entidade: dict[str, Any], categoria: str) -> None:
+            """Permite atualizar status/motivo via PATCH /{id}/status; avisa que a API nao edita dados."""
+            dialog_editar_entidade.clear()
+            eid = entidade.get('id')
+            nome_atual = str(entidade.get('nome') or '-')
+            doc_atual = str(entidade.get('documento') or '-')
+            tipo_raw = str(entidade.get('tipo') or categoria).upper()
+            tipo_lbl = _TIPOS_INSTITUICAO_OPCOES.get(tipo_raw, tipo_raw.capitalize())
+            status_atual = str(entidade.get('status') or 'AGUARDANDO_ANALISE').upper()
+            if status_atual not in _STATUS_CADASTRO_OPCOES:
+                status_atual = 'AGUARDANDO_ANALISE'
+
+            with dialog_editar_entidade, ui.card().style('width:460px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:6px">'
+                    f'Editar {escape(categoria.lower())} #{eid or "-"}</div>'
+                    f'<div class="muted" style="font-size:12px;margin-bottom:12px">'
+                    f'Tipo: <strong>{escape(tipo_lbl)}</strong> • Doc: {escape(doc_atual)}<br>'
+                    f'Nota: a API não possui endpoint de edição de dados cadastrais, '
+                    f'apenas alteração de status.</div>'
+                )
+
+                with ui.element('div').classes('form-grid'):
+                    campo_nome = form_field('Nome', value=nome_atual)
+                    with ui.element('div'):
+                        h('<label class="form-label">Status do cadastro</label>')
+                        sel_status = ui.select(
+                            _STATUS_CADASTRO_OPCOES,
+                            value=status_atual,
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+                    campo_motivo = form_field(
+                        'Motivo (opcional)',
+                        value=str(entidade.get('motivoRejeicao') or ''),
+                        placeholder='Ex: Documentação conferida ou rejeitada',
+                    )
+
+                    def salvar_entidade() -> None:
+                        novo_nome = (campo_nome.value or '').strip()
+                        novo_st = str(sel_status.value or status_atual).upper()
+                        motivo_txt = (campo_motivo.value or '').strip()
+
+                        if novo_nome != nome_atual:
+                            ui.notify(
+                                'A API não consegue alterar o nome ou dados cadastrais; '
+                                'apenas o status foi enviado.',
+                                type='warning',
+                            )
+
+                        if eid is None:
+                            ui.notify('Registro sem ID válido.', type='warning')
+                            return
+
+                        try:
+                            if categoria == 'COOPERATIVA':
+                                atualizar_status_cooperativa(
+                                    int(eid),
+                                    novo_st,
+                                    motivo=motivo_txt or None,
+                                )
+                            else:
+                                atualizar_status_instituicao(
+                                    int(eid),
+                                    novo_st,
+                                    motivo=motivo_txt or None,
+                                )
+                            ui.notify(f'Status de {nome_atual} atualizado!', type='positive')
+                            dialog_editar_entidade.close()
+                            atualizar_kpis_admin()
+                            if carregar_listas_ref[0]:
+                                carregar_listas_ref[0]()
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-end gap-2').style('margin-top:8px'):
+                        eco_button('Cancelar', dialog_editar_entidade.close, cls='outline')
+                        eco_button(
+                            'Salvar status',
+                            salvar_entidade,
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+            dialog_editar_entidade.open()
+
+        def abrir_modal_excluir_entidade(entidade: dict[str, Any], categoria: str) -> None:
+            """Avisa que a API atual nao possui endpoint DELETE para instituicao/cooperativa."""
+            dialog_excluir_entidade.clear()
+            eid = entidade.get('id')
+            nome_ent = str(entidade.get('nome') or f'{categoria.capitalize()} #{eid or "-"}')
+
+            with dialog_excluir_entidade, ui.card().style('width:420px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:8px">Excluir {escape(categoria.lower())}</div>'
+                    f'<div style="font-size:12px;margin-bottom:14px">'
+                    f'A API atual não possui endpoint <strong>DELETE</strong> para excluir '
+                    f'<strong>{escape(nome_ent)}</strong>.</div>'
+                )
+
+                with ui.row().classes('justify-end gap-2').style('margin-top:8px'):
+                    eco_button('Fechar', dialog_excluir_entidade.close, cls='outline')
+
+            dialog_excluir_entidade.open()
+
+        def _render_lista_entidade(
+            container: ui.element,
+            itens: list[dict[str, Any]],
+            categoria: str,
+            mensagem_vazia: str,
+        ) -> None:
+            container.clear()
+            with container:
+                if not itens:
+                    h(f'<div class="muted" style="font-size:12px;padding:8px 0">'
+                      f'{escape(mensagem_vazia)}</div>')
+                    return
+
+                with ui.element('div').classes('list-divided'):
+                    for item in itens:
+                        nome_e = str(item.get('nome') or f"{categoria.capitalize()} #{item.get('id')}")
+                        doc_e = str(item.get('documento') or '').strip()
+                        bairro_e = str(item.get('bairro') or '').strip()
+                        cidade_e = str(item.get('cidade') or '').strip()
+                        local_e = (
+                            f'{bairro_e} - {cidade_e}'
+                            if (bairro_e and cidade_e)
+                            else (bairro_e or cidade_e or '')
+                        )
+                        st_raw = str(item.get('status') or 'ATIVO').upper()
+                        st_lbl = _STATUS_CADASTRO_OPCOES.get(st_raw, st_raw.capitalize())
+                        tone = 'green' if st_raw == 'ATIVO' else ('amber' if 'ANALISE' in st_raw else 'gray')
+
+                        meta_partes = [p for p in [doc_e, local_e] if p]
+                        meta_txt = ' • '.join(meta_partes) if meta_partes else categoria.capitalize()
+
+                        with ui.element('div').classes('item'):
+                            with ui.element('div').style('flex:1;min-width:0'):
+                                h(f'<div class="item-title">{escape(nome_e)}</div>'
+                                  f'<div class="item-meta">{escape(meta_txt)}</div>')
+                            h(f'<span class="badge b-{tone}" style="margin-right:6px">'
+                              f'{escape(st_lbl)}</span>')
+                            with ui.row().classes('gap-1 items-center'):
+                                ui.button(
+                                    'Editar',
+                                    on_click=lambda _e, ent=item, cat=categoria: abrir_modal_editar_entidade(ent, cat),
+                                ).props('flat dense no-caps').classes('btn-ghost')
+                                ui.button(
+                                    'Excluir',
+                                    on_click=lambda _e, ent=item, cat=categoria: abrir_modal_excluir_entidade(ent, cat),
+                                ).props('flat dense no-caps').classes('btn-ghost').style(
+                                    'border-color:#B91C1C !important;color:#B91C1C !important;'
+                                )
+
+        def carregar_listas_admin() -> None:
+            if inst_box_ref[0] is not None:
+                try:
+                    todas_inst = listar_instituicoes()
+                    somente_inst = [
+                        i for i in todas_inst
+                        if str(i.get('tipo') or '').upper() != 'COOPERATIVA'
+                    ]
+                    _render_lista_entidade(
+                        inst_box_ref[0],
+                        somente_inst,
+                        'INSTITUICAO',
+                        'Nenhuma instituição vinculada até o momento.',
+                    )
+                except ApiError as exc:
+                    ui.notify(exc.message, type='warning')
+                    _render_lista_entidade(
+                        inst_box_ref[0],
+                        [],
+                        'INSTITUICAO',
+                        'Nenhuma instituição vinculada até o momento.',
+                    )
+
+            if coop_box_ref[0] is not None:
+                try:
+                    coops = listar_cooperativas()
+                    _render_lista_entidade(
+                        coop_box_ref[0],
+                        coops,
+                        'COOPERATIVA',
+                        'Nenhuma cooperativa vinculada até o momento.',
+                    )
+                except ApiError as exc:
+                    ui.notify(exc.message, type='warning')
+                    _render_lista_entidade(
+                        coop_box_ref[0],
+                        [],
+                        'COOPERATIVA',
+                        'Nenhuma cooperativa vinculada até o momento.',
+                    )
+
+        carregar_listas_ref[0] = carregar_listas_admin
+
+        def abrir_modal_analise(usuario: dict[str, Any]) -> None:
+            dialog_analise.clear()
+            uid = usuario.get('id')
+            if not uid:
+                ui.notify('Cadastro sem ID válido.', type='warning')
+                return
+
+            nome_u = str(usuario.get('nome') or f'Usuário #{uid}')
+            email_u = str(usuario.get('email') or '-')
+            doc_u = str(usuario.get('documento') or '-')
+            perfil_raw = str(usuario.get('perfil') or 'USUARIO').upper()
+            perfil_lbl = _PERFIL_LABEL.get(perfil_raw, perfil_raw)
+            status_atual = str(usuario.get('status') or 'AGUARDANDO_ANALISE').upper()
+            status_lbl = _STATUS_CADASTRO_OPCOES.get(status_atual, status_atual)
+
+            with dialog_analise, ui.card().style('width:460px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:6px">Analisar cadastro #{uid}</div>'
+                    f'<div class="muted" style="font-size:12px;margin-bottom:10px">'
+                    f'<strong>{escape(nome_u)}</strong> • {escape(perfil_lbl)}<br>'
+                    f'E-mail: {escape(email_u)} • Doc: {escape(doc_u)}</div>'
+                    f'<div style="margin-bottom:14px">'
+                    f'<span class="badge b-amber">Status atual: {escape(status_lbl)}</span></div>'
+                )
+
+                campo_motivo = form_field(
+                    'Motivo (obrigatório para rejeitar)',
+                    placeholder='Ex: Documentação incompleta ou inconsistente',
+                )
+
+                def aplicar_status(status_escolhido: str) -> None:
+                    motivo_texto = (campo_motivo.value or '').strip()
+                    if status_escolhido == 'REJEITADO' and not motivo_texto:
+                        ui.notify('Informe o motivo ao rejeitar um cadastro.', type='warning')
+                        return
+
+                    try:
+                        atualizar_status_usuario(
+                            int(uid),
+                            status_escolhido,
+                            motivo=motivo_texto if status_escolhido == 'REJEITADO' else None,
+                        )
+                        rotulo = _STATUS_CADASTRO_OPCOES.get(status_escolhido, status_escolhido)
+                        ui.notify(f'Cadastro de {nome_u} atualizado para: {rotulo}.', type='positive')
+                        dialog_analise.close()
+                        atualizar_kpis_admin()
+                        carregar_listas_admin()
+                        if carregar_pendentes_ref[0]:
+                            carregar_pendentes_ref[0](notificar_erro=True)
+                    except ApiError as exc:
+                        ui.notify(exc.message, type='negative')
+
+                with ui.row().classes('justify-between items-center w-full').style('margin-top:12px'):
+                    eco_button('Cancelar', dialog_analise.close, cls='outline')
+                    with ui.row().classes('gap-2'):
+                        eco_button(
+                            'Rejeitar',
+                            lambda: aplicar_status('REJEITADO'),
+                            cls='outline',
+                        )
+                        eco_button(
+                            'Aprovar',
+                            lambda: aplicar_status('ATIVO'),
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+            dialog_analise.open()
 
         with grid('65'):
-            with card('Minhas instituições'):
-                inst_tabela_container = ui.element('div')
-                with inst_tabela_container:
-                    try:
-                        lista = listar_minhas_instituicoes()
-                        if lista:
-                            data_table(_converter_instituicoes_para_tabela(lista), divided=True, tall=True)
-                        else:
-                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                              'Nenhuma instituição vinculada ao usuário até o momento.</div>')
-                    except ApiError as exc:
-                        ui.notify(exc.message, type='warning')
-                        h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                          'Nenhuma instituição vinculada ao usuário até o momento.</div>')
-
             with ui.element('div').classes('stack'):
-                with card('Cadastros em análise', cls='card-sm'):
-                    linhas = ''.join(
-                        f'<div class="item"><div style="flex:1">'
-                        f'<div class="item-title">{escape(nome)}</div>'
-                        f'<div class="item-meta">{escape(tipo)}</div></div>'
-                        f'<button class="badge b-amber" style="border:none;cursor:pointer" '
-                        f'onclick="ecoToast(\'Análise de {escape(nome)} aberta.\')">'
-                        f'Analisar</button></div>'
-                        for nome, tipo in m.CADASTROS_EM_ANALISE
-                    )
-                    h(f'<div class="list-divided">{linhas}</div>')
+                with card('Instituições'):
+                    inst_box_ref[0] = ui.element('div').classes('w-full')
 
-                with card('Perfis de acesso', cls='card-sm'):
-                    stacked_metric_list(m.PERFIS_ACESSO)
+                with card('Cooperativas'):
+                    coop_box_ref[0] = ui.element('div').classes('w-full')
+
+            with card('Cadastros em análise', cls='card-sm'):
+                pendentes_container = ui.element('div')
+
+                def carregar_pendentes(notificar_erro: bool = False) -> None:
+                    pendentes_container.clear()
+                    with pendentes_container:
+                        try:
+                            pendentes = listar_usuarios(status='AGUARDANDO_ANALISE')
+                            if not pendentes:
+                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                                  'Nenhum cadastro aguardando aprovação no momento.</div>')
+                                return
+
+                            with ui.element('div').classes('list-divided'):
+                                for u in pendentes:
+                                    nome_u = str(u.get('nome') or f"Usuário #{u.get('id')}")
+                                    perfil_raw = str(u.get('perfil') or 'USUARIO').upper()
+                                    tipo_lbl = _PERFIL_LABEL.get(perfil_raw, perfil_raw.capitalize())
+                                    with ui.element('div').classes('item'):
+                                        with ui.element('div').style('flex:1'):
+                                            h(f'<div class="item-title">{escape(nome_u)}</div>'
+                                              f'<div class="item-meta">{escape(tipo_lbl)}</div>')
+                                        ui.button(
+                                            'Analisar',
+                                            on_click=lambda _e, item=u: abrir_modal_analise(item),
+                                        ).props('flat dense no-caps').classes('badge b-amber').style(
+                                            'border:none;cursor:pointer'
+                                        )
+                        except ApiError as exc:
+                            if notificar_erro:
+                                ui.notify(exc.message, type='warning')
+                            linhas = ''.join(
+                                f'<div class="item"><div style="flex:1">'
+                                f'<div class="item-title">{escape(nome)}</div>'
+                                f'<div class="item-meta">{escape(tipo)}</div></div>'
+                                f'<button class="badge b-amber" style="border:none;cursor:pointer" '
+                                f'onclick="ecoToast(\'Análise de {escape(nome)} aberta.\')">'
+                                f'Analisar</button></div>'
+                                for nome, tipo in m.CADASTROS_EM_ANALISE
+                            )
+                            h(f'<div class="list-divided">{linhas}</div>')
+
+                carregar_pendentes_ref[0] = carregar_pendentes
+                carregar_pendentes(notificar_erro=False)
+
+        carregar_listas_admin()
 
 
 def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) -> None:
@@ -1223,7 +1625,6 @@ def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) ->
         page_header(dados.page_title, dados.page_subtitle)
 
         with grid('65'):
-            # Card da esquerda: Mapa da rota
             with card():
                 with ui.element('div').classes('card-head'):
                     h(f'<div>'
@@ -1237,7 +1638,6 @@ def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) ->
 
                 route_map_html()
 
-            # Card da direita: Resumo da rota
             with card('Resumo da rota'):
                 h(f'''
                 <div>
@@ -1277,7 +1677,6 @@ def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) ->
 
                 eco_button(dados.btn_acao, acao_principal, cls='eco-block')
 
-        # Card inferior: Tabela de sequencia de paradas
         with card('Sequência de paradas'):
             data_table(dados.tabela_paradas)
 

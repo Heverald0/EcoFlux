@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import base64
+import json
 import httpx
 
 API_BASE_URL = 'http://localhost:8080'
@@ -52,13 +54,56 @@ def _extrair_erro(response: httpx.Response, fallback: str) -> str:
     return fallback
 
 
-def cadastrar_usuario(nome: str, email: str, senha: str) -> UsuarioCriado:
+def _normalizar_perfil(perfil: str | None) -> str | None:
+    if not perfil or not str(perfil).strip():
+        return None
+    limpo = str(perfil).strip().upper()
+    if limpo.startswith('ROLE_'):
+        limpo = limpo[5:]
+    return limpo or None
+
+
+def _extrair_perfil_jwt(token: str) -> str | None:
+    try:
+        partes = token.split('.')
+        if len(partes) < 2:
+            return None
+        payload_b64 = partes[1] + '=' * (-len(partes[1]) % 4)
+        dados = json.loads(
+            base64.urlsafe_b64decode(payload_b64.encode('utf-8')).decode('utf-8')
+        )
+        if isinstance(dados, dict):
+            valor = dados.get('perfil') or dados.get('role') or dados.get('authorities')
+            if isinstance(valor, list) and valor:
+                valor = valor[0]
+            if isinstance(valor, str):
+                return _normalizar_perfil(valor)
+    except Exception:
+        return None
+    return None
+
+
+def cadastrar_usuario(
+    nome: str,
+    email: str,
+    senha: str,
+    *,
+    documento: str | None = None,
+    telefone: str | None = None,
+    perfil: str | None = None,
+) -> UsuarioCriado:
     """Envia POST /api/v1/usuarios para o Spring Boot."""
-    payload = {
+    payload: dict[str, Any] = {
         'nome': nome.strip(),
         'email': email.strip().lower(),
         'senha': senha,
     }
+    if documento and documento.strip():
+        payload['documento'] = documento.strip()[:20]
+    if telefone and telefone.strip():
+        payload['telefone'] = telefone.strip()[:20]
+    if perfil and perfil.strip():
+        payload['perfil'] = perfil.strip().upper()
 
     try:
         with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
@@ -101,12 +146,24 @@ def fazer_login(email: str, senha: str) -> SessaoAuth:
             'Confira se o Spring Boot está rodando.'
         ) from exc
 
+    detalhe = _extrair_erro(response, '').strip()
+    detalhe_lower = detalhe.lower()
+
+    if response.status_code == 403 or any(
+        p in detalhe_lower
+        for p in ('desabilit', 'aguardando', 'análise', 'analise', 'aprovação', 'aprovacao')
+    ):
+        raise ApiError(
+            detalhe or 'Sua conta está aguardando aprovação para liberar o acesso.',
+            status_code=response.status_code,
+        )
+
     if response.status_code == 401:
         raise ApiError('E-mail ou senha inválidos.', status_code=401)
 
     if response.status_code != 200:
         raise ApiError(
-            _extrair_erro(response, f'Falha ao autenticar (HTTP {response.status_code}).'),
+            detalhe or f'Falha ao autenticar (HTTP {response.status_code}).',
             status_code=response.status_code,
         )
 
@@ -125,16 +182,114 @@ def fazer_login(email: str, senha: str) -> SessaoAuth:
 SESSAO_ATUAL: dict[str, str | None] = {
     'token': None,
     'email': None,
+    'perfil': None,
+    'nome': None,
 }
 
 
-def definir_sessao(token: str, email: str) -> None:
+def buscar_perfil_atual(token: str | None = None) -> dict[str, Any]:
+    """GET /api/v1/usuarios/me para obter os dados e perfil do usuário autenticado."""
+    tok = token or obter_token()
+    if not tok:
+        raise ApiError('Sessão expirada ou não autenticada. Faça login novamente.', status_code=401)
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get('/api/v1/usuarios/me', headers=auth_headers(tok))
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao consultar perfil atual (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
+
+
+def definir_sessao(token: str, email: str, perfil: str | None = None) -> None:
+    email_limpo = email.strip().lower()
     SESSAO_ATUAL['token'] = token
-    SESSAO_ATUAL['email'] = email.strip().lower()
+    SESSAO_ATUAL['email'] = email_limpo
+    SESSAO_ATUAL['nome'] = None
+
+    perfil_resolvido = _normalizar_perfil(perfil) or _extrair_perfil_jwt(token)
+
+    try:
+        me = buscar_perfil_atual(token)
+        perfil_me = _normalizar_perfil(me.get('perfil'))
+        if perfil_me:
+            perfil_resolvido = perfil_me
+        if me.get('nome'):
+            SESSAO_ATUAL['nome'] = str(me['nome']).strip()
+        if me.get('email'):
+            SESSAO_ATUAL['email'] = str(me['email']).strip().lower()
+    except ApiError:
+        pass
+
+    SESSAO_ATUAL['perfil'] = perfil_resolvido
+
+
+def limpar_sessao() -> None:
+    SESSAO_ATUAL['token'] = None
+    SESSAO_ATUAL['email'] = None
+    SESSAO_ATUAL['perfil'] = None
+    SESSAO_ATUAL['nome'] = None
 
 
 def obter_token() -> str | None:
     return SESSAO_ATUAL['token']
+
+
+def obter_email_atual() -> str | None:
+    return SESSAO_ATUAL['email']
+
+
+def obter_nome_atual() -> str | None:
+    nome = SESSAO_ATUAL.get('nome')
+    if nome and str(nome).strip():
+        return str(nome).strip()
+    token = obter_token()
+    if token:
+        try:
+            me = buscar_perfil_atual(token)
+            if me.get('nome'):
+                nome_me = str(me['nome']).strip()
+                SESSAO_ATUAL['nome'] = nome_me
+                return nome_me
+        except ApiError:
+            pass
+    email = obter_email_atual()
+    if email:
+        return email.split('@')[0]
+    return None
+
+
+def obter_perfil_atual() -> str | None:
+    perfil = _normalizar_perfil(SESSAO_ATUAL.get('perfil'))
+    if perfil:
+        return perfil
+    token = obter_token()
+    if token:
+        perfil_jwt = _extrair_perfil_jwt(token)
+        if perfil_jwt:
+            SESSAO_ATUAL['perfil'] = perfil_jwt
+            return perfil_jwt
+        try:
+            me = buscar_perfil_atual(token)
+            perfil_me = _normalizar_perfil(me.get('perfil'))
+            if perfil_me:
+                SESSAO_ATUAL['perfil'] = perfil_me
+                return perfil_me
+        except ApiError:
+            pass
+    return None
+
+
+def eh_administrador() -> bool:
+    return obter_perfil_atual() == 'ADMINISTRADOR'
 
 
 def _auth_headers_obrigatorio() -> dict[str, str]:
@@ -142,6 +297,61 @@ def _auth_headers_obrigatorio() -> dict[str, str]:
     if not token:
         raise ApiError('Sessão expirada ou não autenticada. Faça login novamente.', status_code=401)
     return auth_headers(token)
+
+
+def listar_usuarios(status: str | None = None) -> list[dict[str, Any]]:
+    """GET /api/v1/usuarios (opcionalmente filtrado por StatusCadastro)."""
+    params: dict[str, str] = {}
+    if status and status.strip():
+        params['status'] = status.strip().upper()
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/usuarios',
+                params=params or None,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar usuários (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def atualizar_status_usuario(
+    usuario_id: int,
+    novo_status: str,
+    motivo: str | None = None,
+) -> dict[str, Any]:
+    """PATCH /api/v1/usuarios/{id}/status."""
+    payload: dict[str, Any] = {'status': novo_status.strip().upper()}
+    if motivo and motivo.strip():
+        payload['motivo'] = motivo.strip()[:255]
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/usuarios/{usuario_id}/status',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao atualizar status do usuário (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
 
 
 def listar_pontos_coleta(
@@ -373,6 +583,122 @@ def listar_minhas_instituicoes() -> list[dict[str, Any]]:
 
     dados = resp.json()
     return dados if isinstance(dados, list) else []
+
+
+def listar_instituicoes(
+    *,
+    tipo: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """GET /api/v1/instituicoes (opcionalmente filtrado por tipo e status)."""
+    params: dict[str, str] = {}
+    if tipo and tipo.strip():
+        params['tipo'] = tipo.strip().upper()
+    if status and status.strip():
+        params['status'] = status.strip().upper()
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/instituicoes',
+                params=params or None,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar instituições (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def atualizar_status_instituicao(
+    instituicao_id: int,
+    novo_status: str,
+    motivo: str | None = None,
+) -> dict[str, Any]:
+    """PATCH /api/v1/instituicoes/{id}/status."""
+    payload: dict[str, Any] = {'status': novo_status.strip().upper()}
+    if motivo and motivo.strip():
+        payload['motivo'] = motivo.strip()[:255]
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/instituicoes/{instituicao_id}/status',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao atualizar status da instituição (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
+
+
+def listar_cooperativas(status: str | None = None) -> list[dict[str, Any]]:
+    """GET /api/v1/cooperativas (opcionalmente filtrado por status)."""
+    params: dict[str, str] = {}
+    if status and status.strip():
+        params['status'] = status.strip().upper()
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/cooperativas',
+                params=params or None,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar cooperativas (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def atualizar_status_cooperativa(
+    cooperativa_id: int,
+    novo_status: str,
+    motivo: str | None = None,
+) -> dict[str, Any]:
+    """PATCH /api/v1/cooperativas/{id}/status."""
+    payload: dict[str, Any] = {'status': novo_status.strip().upper()}
+    if motivo and motivo.strip():
+        payload['motivo'] = motivo.strip()[:255]
+
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/cooperativas/{cooperativa_id}/status',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao atualizar status da cooperativa (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
 
 
 def cadastrar_instituicao(payload: dict[str, Any]) -> dict[str, Any]:

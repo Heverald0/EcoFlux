@@ -1,8 +1,15 @@
 from pathlib import Path
+import re
 
 from nicegui import app, ui
 
-from api_client import ApiError, cadastrar_usuario, definir_sessao, fazer_login
+from api_client import (
+    ApiError,
+    cadastrar_usuario,
+    definir_sessao,
+    fazer_login,
+    limpar_sessao,
+)
 import pages  # noqa: F401  (registra as rotas das telas internas)
 
 
@@ -11,6 +18,51 @@ app.add_static_file(
     local_file=ASSETS_DIR / 'ecoflux-logo.jpg',
     url_path='/assets/ecoflux-logo.jpg',
 )
+
+
+def _formatar_cpf_cnpj(valor: str | None) -> str:
+    digitos = re.sub(r'\D', '', valor or '')[:14]
+    if len(digitos) <= 11:
+        if len(digitos) <= 3:
+            return digitos
+        if len(digitos) <= 6:
+            return f'{digitos[:3]}.{digitos[3:]}'
+        if len(digitos) <= 9:
+            return f'{digitos[:3]}.{digitos[3:6]}.{digitos[6:]}'
+        return f'{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}'
+
+    if len(digitos) <= 2:
+        return digitos
+    if len(digitos) <= 5:
+        return f'{digitos[:2]}.{digitos[2:]}'
+    if len(digitos) <= 8:
+        return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:]}'
+    if len(digitos) <= 12:
+        return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:]}'
+    return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}'
+
+
+def _formatar_telefone(valor: str | None) -> str:
+    digitos = re.sub(r'\D', '', valor or '')[:11]
+    if not digitos:
+        return ''
+    if len(digitos) <= 2:
+        return f'({digitos}'
+    if len(digitos) <= 6:
+        return f'({digitos[:2]}) {digitos[2:]}'
+    if len(digitos) <= 10:
+        return f'({digitos[:2]}) {digitos[2:6]}-{digitos[6:]}'
+    return f'({digitos[:2]}) {digitos[2:7]}-{digitos[7:]}'
+
+
+def _vincular_mascara(campo: ui.input, formatador) -> None:
+    def ao_alterar(e) -> None:
+        atual = str(e.value or '')
+        formatado = formatador(atual)
+        if atual != formatado:
+            campo.value = formatado
+
+    campo.on_value_change(ao_alterar)
 
 
 ui.add_head_html('''
@@ -265,6 +317,24 @@ ui.add_head_html('''
   .field-span-2 { grid-column: 1 / -1; }
   .required { color: #b42318; }
   .register-button { margin-top: 4px; }
+  .approval-notice {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid #f59e0b;
+    border-radius: 10px;
+    color: #92400e;
+    background: #fffbeb;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .approval-notice .q-icon {
+    margin-top: 1px;
+    color: #d97706;
+    font-size: 18px;
+  }
   .terms-row {
     grid-column: 1 / -1;
     margin-top: -4px;
@@ -317,6 +387,7 @@ ui.add_head_html('''
     .registration-card { padding: 24px; }
     .registration-form { grid-template-columns: 1fr; gap: 20px; }
     .registration-form .field-span-2,
+    .registration-form .approval-notice,
     .registration-form .terms-row { grid-column: 1; }
   }
 </style>
@@ -374,7 +445,8 @@ def login_page() -> None:
         try:
             sessao = fazer_login(email=email.value, senha=password.value)
         except ApiError as exc:
-            ui.notify(exc.message, type='negative')
+            tipo_alerta = 'warning' if exc.status_code == 403 else 'negative'
+            ui.notify(exc.message, type=tipo_alerta)
             return
 
         definir_sessao(sessao.token, email.value)
@@ -430,6 +502,13 @@ def registration_page() -> None:
     ui.colors(primary='#15703c')
     ui.page_title('EcoFlux | Cadastro')
 
+    mapa_perfil = {
+        'Usuário': 'USUARIO',
+        'Cooperativa': 'COOPERATIVA',
+        'Empresa': 'EMPRESA',
+        'Condomínio': 'INSTITUICAO',
+    }
+
     def create_registration() -> None:
         required_fields = (
             name,
@@ -447,6 +526,17 @@ def registration_page() -> None:
         if len((name.value or '').strip()) < 3:
             ui.notify('O nome deve ter pelo menos 3 caracteres.', type='warning')
             return
+
+        doc_digitos = re.sub(r'\D', '', document.value or '')
+        if len(doc_digitos) not in (11, 14):
+            ui.notify('Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.', type='warning')
+            return
+
+        tel_digitos = re.sub(r'\D', '', phone.value or '')
+        if tel_digitos and len(tel_digitos) not in (10, 11):
+            ui.notify('Informe um telefone válido com DDD (10 ou 11 dígitos).', type='warning')
+            return
+
         if password.value != password_confirmation.value:
             ui.notify('As senhas informadas não coincidem.', type='negative')
             return
@@ -457,21 +547,34 @@ def registration_page() -> None:
             ui.notify('Você precisa aceitar os termos e a política de privacidade.', type='warning')
             return
 
+        perfil_api = mapa_perfil.get(str(account_type.value or ''), 'USUARIO')
+
         try:
             usuario = cadastrar_usuario(
                 nome=name.value,
                 email=email.value,
                 senha=password.value,
+                documento=document.value,
+                telefone=phone.value,
+                perfil=perfil_api,
             )
         except ApiError as exc:
             ui.notify(exc.message, type='negative')
             return
 
-        ui.notify(
-            f'Cadastro criado com sucesso! Usuário: {usuario.nome} ({usuario.perfil})',
-            type='positive',
-        )
-        ui.navigate.to('/dashboard')
+        limpar_sessao()
+        if perfil_api == 'USUARIO':
+            ui.notify(
+                f'Cadastro criado com sucesso! Faça login com {usuario.email}.',
+                type='positive',
+            )
+        else:
+            ui.notify(
+                f'Cadastro de {account_type.value} enviado! A conta aguarda aprovação antes do primeiro acesso.',
+                type='warning',
+                timeout=6000,
+            )
+        ui.navigate.to('/')
 
     with ui.element('main').classes('login-page'):
         brand_panel()
@@ -501,6 +604,21 @@ def registration_page() -> None:
                                 'outlined hide-bottom-space options-dense aria-label="Tipo"'
                             ).classes('eco-input')
 
+                        with ui.element('div').classes('approval-notice') as approval_notice:
+                            ui.icon('hourglass_top')
+                            ui.html(
+                                '<div><strong>Aprovação necessária:</strong> cadastros de '
+                                'Cooperativa, Empresa ou Condomínio passam por aprovação '
+                                'antes de liberar o acesso.</div>',
+                                sanitize=False,
+                            )
+
+                        def atualizar_aviso_aprovacao() -> None:
+                            approval_notice.set_visibility(account_type.value != 'Usuário')
+
+                        account_type.on_value_change(lambda _e: atualizar_aviso_aprovacao())
+                        atualizar_aviso_aprovacao()
+
                         with ui.element('div').classes('field-group'):
                             field_label('Responsável')
                             responsible = ui.input(placeholder='Luca Soares').props(
@@ -509,8 +627,22 @@ def registration_page() -> None:
 
                         with ui.element('div').classes('field-group'):
                             field_label('CNPJ/CPF')
-                            document = ui.input(placeholder='00.000.000/0001-00').props(
-                                'outlined hide-bottom-space inputmode=numeric aria-label="CNPJ ou CPF"'
+                            document = ui.input(placeholder='000.000.000-00 ou 00.000.000/0001-00').props(
+                                'outlined hide-bottom-space inputmode=numeric maxlength=18 aria-label="CNPJ ou CPF"'
+                            ).classes('eco-input')
+                            _vincular_mascara(document, _formatar_cpf_cnpj)
+
+                        with ui.element('div').classes('field-group'):
+                            field_label('Telefone', required=False)
+                            phone = ui.input(placeholder='(73) 99999-9999').props(
+                                'outlined hide-bottom-space inputmode=tel maxlength=15 aria-label="Telefone"'
+                            ).classes('eco-input')
+                            _vincular_mascara(phone, _formatar_telefone)
+
+                        with ui.element('div').classes('field-group'):
+                            field_label('E-mail')
+                            email = ui.input(placeholder='usuario@instituicao.com').props(
+                                'outlined hide-bottom-space type=email autocomplete=email aria-label="E-mail"'
                             ).classes('eco-input')
 
                         with ui.element('div').classes('field-group field-span-2'):
@@ -519,12 +651,6 @@ def registration_page() -> None:
                                 placeholder='Rua das Araucárias, 48, Centro — Porto Seguro — 45810-000'
                             ).props(
                                 'outlined hide-bottom-space autocomplete=street-address aria-label="Endereço"'
-                            ).classes('eco-input')
-
-                        with ui.element('div').classes('field-group field-span-2'):
-                            field_label('E-mail')
-                            email = ui.input(placeholder='usuario@instituicao.com').props(
-                                'outlined hide-bottom-space type=email autocomplete=email aria-label="E-mail"'
                             ).classes('eco-input')
 
                         with ui.element('div').classes('field-group'):
@@ -576,8 +702,9 @@ def recovery_page() -> None:
         if not email.value or '@' not in email.value:
             ui.notify('Informe um e-mail válido para recuperação.', type='warning')
             return
-        if not document.value:
-            ui.notify('Informe o CPF ou CNPJ vinculado à conta.', type='warning')
+        doc_digitos = re.sub(r'\D', '', document.value or '')
+        if len(doc_digitos) not in (11, 14):
+            ui.notify('Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.', type='warning')
             return
         ui.notify(
             f'Instruções de recuperação enviadas para {email.value}!',
@@ -607,9 +734,10 @@ def recovery_page() -> None:
 
                     with ui.element('div').classes('field-group password-group'):
                         field_label('CNPJ/CPF vinculado')
-                        document = ui.input(placeholder='00.000.000/0001-00').props(
-                            'outlined hide-bottom-space inputmode=numeric aria-label="CNPJ ou CPF"'
+                        document = ui.input(placeholder='000.000.000-00 ou 00.000.000/0001-00').props(
+                            'outlined hide-bottom-space inputmode=numeric maxlength=18 aria-label="CNPJ ou CPF"'
                         ).classes('eco-input')
+                        _vincular_mascara(document, _formatar_cpf_cnpj)
                         document.on('keydown.enter', request_recovery)
 
                     ui.button('Enviar instruções', on_click=request_recovery).props(
