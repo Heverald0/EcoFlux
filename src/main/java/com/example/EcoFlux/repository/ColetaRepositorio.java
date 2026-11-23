@@ -18,6 +18,19 @@ public interface ColetaRepositorio extends JpaRepository<Coleta, Long> {
     List<Coleta> findAllByStatusOrderByDataHoraAgendamentoAsc(StatusColeta status);
     Optional<Coleta> findByIdAndUsuarioSolicitante(Long id, Usuario usuarioSolicitante);
 
+    List<Coleta> findAllByInstituicaoId(Long instituicaoId);
+
+    @Query("""
+        SELECT c FROM Coleta c
+        WHERE c.motorista.id = :motoristaId
+          AND c.status IN :statusAtivos
+        ORDER BY c.dataHoraAgendamento ASC
+    """)
+    List<Coleta> findRotaAtivaDoMotorista(
+            @Param("motoristaId") Long motoristaId,
+            @Param("statusAtivos") List<StatusColeta> statusAtivos
+    );
+
     @Query("""
         SELECT DISTINCT c FROM Coleta c
         LEFT JOIN c.instituicao inst
