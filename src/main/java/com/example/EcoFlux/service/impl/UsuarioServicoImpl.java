@@ -42,23 +42,14 @@ public class UsuarioServicoImpl implements UsuarioServico {
             throw new ExcecaoConflitoNegocio(String.format("Ja existe um usuario cadastrado com o documento '%s'.", requisicao.documento()));
         }
 
-        PerfilUsuario perfilDefinido = requisicao.perfil() != null ? requisicao.perfil() : PerfilUsuario.USUARIO;
-        if (perfilDefinido == PerfilUsuario.ADMINISTRADOR) {
-            perfilDefinido = PerfilUsuario.USUARIO;
-        }
-
-        StatusCadastro statusInicial = (perfilDefinido == PerfilUsuario.USUARIO)
-                ? StatusCadastro.ATIVO
-                : StatusCadastro.AGUARDANDO_ANALISE;
-
         Usuario novoUsuario = Usuario.builder()
                 .nome(requisicao.nome().trim())
                 .email(emailFormatado)
                 .documento(documentoLimpo)
                 .telefone(requisicao.telefone() != null ? requisicao.telefone().trim() : null)
                 .senha(codificadorSenha.encode(requisicao.senha()))
-                .perfil(perfilDefinido)
-                .status(statusInicial)
+                .perfil(PerfilUsuario.USUARIO)
+                .status(StatusCadastro.ATIVO)
                 .build();
 
         Usuario usuarioSalvo = usuarioRepositorio.save(novoUsuario);
@@ -87,7 +78,7 @@ public class UsuarioServicoImpl implements UsuarioServico {
     @Transactional
     public UsuarioResposta atualizarStatus(Long id, AtualizarStatusCadastroRequisicao requisicao, Usuario adminAutenticado) {
         if (adminAutenticado.getPerfil() != PerfilUsuario.ADMINISTRADOR) {
-            throw new ExcecaoConflitoNegocio("Apenas administradores podem aprovar ou alterar o status de cadastros.");
+            throw new ExcecaoConflitoNegocio("Apenas administradores podem alterar o status de usuarios.");
         }
 
         Usuario usuario = usuarioRepositorio.findById(id)

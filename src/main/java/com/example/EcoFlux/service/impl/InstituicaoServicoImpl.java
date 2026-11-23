@@ -51,12 +51,6 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
                 .build();
 
         Instituicao instituicaoSalva = instituicaoRepositorio.save(novaInstituicao);
-
-        if (usuarioResponsavel.getPerfil() == PerfilUsuario.USUARIO) {
-            usuarioResponsavel.setPerfil(PerfilUsuario.INSTITUICAO);
-            usuarioRepositorio.save(usuarioResponsavel);
-        }
-
         return InstituicaoResposta.converter(instituicaoSalva);
     }
 
@@ -121,6 +115,26 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
                 ? requisicao.motivo().trim()
                 : null);
 
-        return InstituicaoResposta.converter(instituicaoRepositorio.save(instituicao));
+        Instituicao instituicaoAtualizada = instituicaoRepositorio.save(instituicao);
+
+        if (requisicao.status() == StatusCadastro.ATIVO) {
+            Usuario responsavel = instituicaoAtualizada.getUsuarioResponsavel();
+            responsavel.setStatus(StatusCadastro.ATIVO);
+            responsavel.setMotivoRejeicao(null);
+
+            if (responsavel.getPerfil() == PerfilUsuario.USUARIO || responsavel.getPerfil() == PerfilUsuario.INSTITUICAO) {
+                responsavel.setPerfil(mapearPerfilResponsavel(instituicaoAtualizada.getTipo()));
+            }
+            usuarioRepositorio.save(responsavel);
+        }
+
+        return InstituicaoResposta.converter(instituicaoAtualizada);
+    }
+
+    private PerfilUsuario mapearPerfilResponsavel(TipoInstituicao tipo) {
+        return switch (tipo) {
+            case COOPERATIVA -> PerfilUsuario.COOPERATIVA;
+            default -> PerfilUsuario.INSTITUICAO;
+        };
     }
 }
