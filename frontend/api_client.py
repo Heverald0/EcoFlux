@@ -524,11 +524,32 @@ def agendar_coleta(payload: dict[str, Any]) -> dict[str, Any]:
     return resp.json()
 
 
+def buscar_coleta_por_id(coleta_id: int) -> dict[str, Any]:
+    """GET /api/v1/coletas/{id}."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                f'/api/v1/coletas/{coleta_id}',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao buscar coleta (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
+
+
 def listar_minhas_coletas(status: str | None = None) -> list[dict[str, Any]]:
     """GET /api/v1/coletas/minhas."""
     params: dict[str, str] = {}
     if status and status.strip():
-        params['status'] = status.strip()
+        params['status'] = status.strip().upper()
 
     try:
         with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
@@ -629,6 +650,26 @@ def atualizar_status_coleta(
     return resp.json()
 
 
+def cancelar_coleta(coleta_id: int) -> dict[str, Any]:
+    """PATCH /api/v1/coletas/{id}/cancelar."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/coletas/{coleta_id}/cancelar',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao cancelar coleta (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
+
+
 def listar_minhas_instituicoes() -> list[dict[str, Any]]:
     """GET /api/v1/instituicoes/minhas."""
     try:
@@ -669,6 +710,7 @@ def listar_instituicoes(
                 params=params or None,
                 headers=_auth_headers_obrigatorio(),
             )
+            print('[DEBUG API]', resp.request.method, resp.request.url, '->', resp.status_code, resp.text)
     except httpx.RequestError as exc:
         raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
 

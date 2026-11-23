@@ -23,11 +23,13 @@ from api_client import (
     atualizar_status_cooperativa,
     atualizar_status_instituicao,
     atualizar_status_usuario,
+    buscar_coleta_por_id,
     buscar_ecoimpacto_global,
     buscar_material_por_codigo,
     buscar_meu_ecoimpacto,
     buscar_meu_ecoscore,
     buscar_timeline_coleta,
+    cancelar_coleta,
     criar_ponto_coleta,
     eh_administrador,
     listar_coletas_operacional,
@@ -323,12 +325,20 @@ def _converter_coletas_para_tabela(coletas: list[dict[str, Any]]) -> m.Table:
         else:
             qtd_str = '-'
 
+        origem_lbl = str(
+            c.get('nomeInstituicao')
+            or c.get('nomeCooperativa')
+            or c.get('nomeSolicitante')
+            or c.get('bairro')
+            or '-'
+        )
+
         st_raw = str(c.get('status') or 'AGENDADA').upper()
         st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
-        rows.append((data_fmt, mat_lbl, qtd_str, m.Badge(st_lbl)))
+        rows.append((data_fmt, mat_lbl, qtd_str, origem_lbl, m.Badge(st_lbl)))
 
     return m.Table(
-        columns=('Data', 'Material', 'Quantidade', 'Status'),
+        columns=('Data', 'Material', 'Quantidade', 'Origem / Entidade', 'Status'),
         rows=rows,
     )
 
@@ -349,7 +359,15 @@ def _converter_timeline_para_etapas(eventos: list[dict[str, Any]]) -> list[m.Ste
         data_fmt = _formatar_data_curta(str(ev.get('dataRegistro') or ''))
         hora_reg = str(ev.get('dataRegistro') or '')[11:16]
         obs = str(ev.get('observacao') or '').strip()
-        meta_partes = [p for p in [f'{data_fmt} - {hora_reg}' if hora_reg else data_fmt, obs] if p]
+        autor = str(ev.get('nomeAutor') or '').strip()
+        meta_partes = [
+            p for p in [
+                f'{data_fmt} - {hora_reg}' if hora_reg else data_fmt,
+                obs,
+                f'Por {autor}' if autor else '',
+            ]
+            if p
+        ]
         etapas.append(m.Step(title=titulo, meta=' • '.join(meta_partes), done=True))
 
     fluxo_padrao = [
@@ -473,11 +491,15 @@ def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
         }
         recentes_rows: list[tuple] = []
         for c in list(reversed(coletas))[:5]:
-            inst_id = c.get('instituicaoId')
+            nome_inst_resp = str(c.get('nomeInstituicao') or '').strip()
+            inst_id = c.get('idInstituicao') if c.get('idInstituicao') is not None else c.get('instituicaoId')
             origem = (
-                mapa_inst.get(int(inst_id))
-                if inst_id is not None and int(inst_id) in mapa_inst
-                else (str(c.get('bairro') or '').strip() or 'Solicitação própria')
+                nome_inst_resp
+                or (
+                    mapa_inst.get(int(inst_id))
+                    if inst_id is not None and int(inst_id) in mapa_inst
+                    else (str(c.get('bairro') or '').strip() or 'Solicitação própria')
+                )
             )
             mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
             mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
@@ -780,8 +802,11 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
             except ValueError:
                 pass
 
-        inst_id = c.get('instituicaoId')
-        if inst_id is not None and int(inst_id) in instituicoes_mapa:
+        nome_inst_resp = str(c.get('nomeInstituicao') or '').strip()
+        inst_id = c.get('idInstituicao') if c.get('idInstituicao') is not None else c.get('instituicaoId')
+        if nome_inst_resp:
+            nome_inst = nome_inst_resp
+        elif inst_id is not None and int(inst_id) in instituicoes_mapa:
             nome_inst = instituicoes_mapa[int(inst_id)]
         else:
             nome_inst = str(c.get('bairro') or '').strip() or 'Solicitação avulsa'
@@ -1169,15 +1194,70 @@ def pontos_de_coleta() -> None:
             dialog_editar.open()
 
         with grid('2'):
-            with card():
-                with ui.element('div').classes('map-box'):
-                    h(icon('map') +
-                      '<div style="font-size:14px;font-weight:500">Mapa interativo de pontos</div>'
-                      '<div class="muted" style="font-size:11px">34 pontos ativos na região</div>'
-                      '<div style="font-size:11px">• Papel/Plástico • Eletrônico • Metal/Vidro</div>')
-                    eco_button('Planejar rota',
-                               lambda: ui.navigate.to('/rotas')
-                               ).style('width:130px;margin-top:10px')
+            with card('Rotas disponíveis'):
+                rotas_disponiveis = {
+                    'centro': {
+                        'nome': m.ROTA_PLANEJAMENTO.nome_rota,
+                        'detalhe': (
+                            f'{len(m.ROTA_PLANEJAMENTO.tabela_paradas.rows)} paradas • '
+                            f'{m.ROTA_PLANEJAMENTO.distancia} • {m.ROTA_PLANEJAMENTO.duracao}'
+                        ),
+                        'carga': m.ROTA_PLANEJAMENTO.carga,
+                    },
+                    'norte': {
+                        'nome': 'Rota Zona Norte • Coleta Seletiva',
+                        'detalhe': '4 paradas • 18,2 km • 1h10',
+                        'carga': '420 kg',
+                    },
+                    'sul': {
+                        'nome': 'Rota Zona Sul • Ecopontos',
+                        'detalhe': '3 paradas • 14,5 km • 50min',
+                        'carga': '310 kg',
+                    },
+                }
+
+                opcoes_rotas = {k: v['nome'] for k, v in rotas_disponiveis.items()}
+
+                with ui.element('div').classes('form-grid'):
+                    with ui.element('div'):
+                        h('<label class="form-label">Escolha a rota</label>')
+                        rota_sel = ui.select(
+                            opcoes_rotas,
+                            value='centro',
+                        ).props(
+                            'outlined dense hide-bottom-space options-dense aria-label="Rotas disponíveis"'
+                        ).classes('eco-field')
+
+                    resumo_rota_box = ui.element('div').classes('w-full')
+
+                    def _atualizar_preview_rota() -> None:
+                        resumo_rota_box.clear()
+                        escolhida = rotas_disponiveis.get(str(rota_sel.value or 'centro'))
+                        if not escolhida:
+                            return
+                        with resumo_rota_box:
+                            h(
+                                f'<div style="padding:14px;border-radius:10px;background:#F5F7F8;'
+                                f'border:1px solid #E5E7EB">'
+                                f'  <div style="font-size:13px;font-weight:600;color:{PRIMARY}">'
+                                f'    {escape(escolhida["nome"])}'
+                                f'  </div>'
+                                f'  <div class="muted" style="font-size:11px;margin-top:4px">'
+                                f'    {escape(escolhida["detalhe"])} • Carga prevista: {escape(escolhida["carga"])}'
+                                f'  </div>'
+                                f'</div>'
+                            )
+
+                    rota_sel.on_value_change(lambda _e: _atualizar_preview_rota())
+                    _atualizar_preview_rota()
+
+                    def seguir_rota() -> None:
+                        escolhida = rotas_disponiveis.get(str(rota_sel.value or 'centro'))
+                        if escolhida:
+                            ui.notify(f'Rota selecionada: {escolhida["nome"]}', type='positive')
+                        ui.navigate.to('/rotas')
+
+                    eco_button('Selecionar rota', seguir_rota, cls='dark eco-block')
 
             with card('Cadastrar novo ponto'):
                 with ui.element('div').classes('form-grid'):
@@ -1269,6 +1349,7 @@ def agendamentos() -> None:
 
         mapa_instituicoes: dict[int, str] = {}
         mapa_cooperativas: dict[int, str] = {}
+
         try:
             for inst in listar_minhas_instituicoes():
                 if inst.get('id') is not None:
@@ -1280,8 +1361,40 @@ def agendamentos() -> None:
                     else:
                         mapa_instituicoes[inst_id] = nome_inst
         except ApiError:
-            mapa_instituicoes = {}
-            mapa_cooperativas = {}
+            pass
+
+        if not mapa_instituicoes:
+            try:
+                for inst in listar_instituicoes(status='ATIVO'):
+                    if inst.get('id') is not None and str(inst.get('tipo') or '').upper() != 'COOPERATIVA':
+                        inst_id = int(inst['id'])
+                        mapa_instituicoes[inst_id] = str(inst.get('nome') or f'Instituição #{inst_id}')
+            except ApiError:
+                pass
+
+        if not mapa_cooperativas:
+            try:
+                for coop in listar_cooperativas(status='ATIVO'):
+                    if coop.get('id') is not None:
+                        coop_id = int(coop['id'])
+                        mapa_cooperativas[coop_id] = str(coop.get('nome') or f'Cooperativa #{coop_id}')
+            except ApiError:
+                pass
+
+        def _buscar_coletas_disponiveis() -> list[dict[str, Any]]:
+            minhas: list[dict[str, Any]] = []
+            try:
+                minhas = listar_minhas_coletas()
+            except ApiError:
+                minhas = []
+
+            if minhas or not eh_administrador():
+                return minhas
+
+            try:
+                return listar_coletas_operacional()
+            except ApiError:
+                return minhas
 
         def abrir_modal_status(coleta: dict[str, Any]) -> None:
             dialog_status.clear()
@@ -1294,8 +1407,23 @@ def agendamentos() -> None:
             if st_atual not in _STATUS_COLETA_OPCOES:
                 st_atual = 'ENVIADA'
 
-            with dialog_status, ui.card().style('width:440px;max-width:95vw;border-radius:16px;padding:20px'):
-                h(f'<div class="card-title" style="margin-bottom:12px">Status da coleta #{cid}</div>')
+            coop_atual_raw = coleta.get('idCooperativa') if coleta.get('idCooperativa') is not None else coleta.get('cooperativaId')
+            coop_inicial = int(coop_atual_raw) if coop_atual_raw is not None and int(coop_atual_raw) in mapa_cooperativas else None
+
+            info_partes: list[str] = [f'Status atual: {_STATUS_COLETA_OPCOES.get(st_atual, st_atual)}']
+            if coleta.get('nomeInstituicao'):
+                info_partes.append(f"Instituição: {coleta['nomeInstituicao']}")
+            if coleta.get('nomeCooperativa'):
+                info_partes.append(f"Cooperativa: {coleta['nomeCooperativa']}")
+            if coleta.get('nomeSolicitante'):
+                info_partes.append(f"Solicitante: {coleta['nomeSolicitante']}")
+
+            with dialog_status, ui.card().style('width:460px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:6px">Status da coleta #{cid}</div>'
+                    f'<div class="muted" style="font-size:11px;margin-bottom:12px">'
+                    f'{escape(" • ".join(info_partes))}</div>'
+                )
                 with ui.element('div').classes('form-grid'):
                     with ui.element('div'):
                         h('<label class="form-label">Novo status</label>')
@@ -1303,30 +1431,71 @@ def agendamentos() -> None:
                             _STATUS_COLETA_OPCOES,
                             value=st_atual,
                         ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                    if mapa_cooperativas:
+                        with ui.element('div'):
+                            h('<label class="form-label">Cooperativa (opcional)</label>')
+                            sel_coop_modal = ui.select(
+                                mapa_cooperativas,
+                                value=coop_inicial,
+                            ).props('outlined dense hide-bottom-space options-dense clearable').classes('eco-field')
+                    else:
+                        sel_coop_modal = None
+
                     obs_st = form_field('Observação (opcional)', placeholder='Ex: Coletado em 11 de abr')
 
                     def salvar_status() -> None:
+                        escolhido = str(sel_st.value or st_atual).upper()
                         try:
-                            atualizar_status_coleta(
-                                int(cid),
-                                str(sel_st.value or st_atual).upper(),
-                                obs_st.value,
-                            )
-                            ui.notify(f'Status da coleta #{cid} atualizado!', type='positive')
+                            if escolhido == 'CANCELADA':
+                                cancelar_coleta(int(cid))
+                                ui.notify(f'Coleta #{cid} cancelada com sucesso!', type='positive')
+                            else:
+                                coop_val = (
+                                    int(sel_coop_modal.value)
+                                    if sel_coop_modal is not None and sel_coop_modal.value is not None
+                                    else None
+                                )
+                                atualizar_status_coleta(
+                                    int(cid),
+                                    escolhido,
+                                    obs_st.value,
+                                    cooperativa_id=coop_val,
+                                )
+                                ui.notify(f'Status da coleta #{cid} atualizado!', type='positive')
                             dialog_status.close()
                             if carregar_coletas_ref[0]:
                                 carregar_coletas_ref[0](notificar_erro=True, focar_id=int(cid))
                         except ApiError as exc:
                             ui.notify(exc.message, type='negative')
 
-                    with ui.row().classes('justify-end gap-2').style('margin-top:8px'):
-                        eco_button('Cancelar', dialog_status.close, cls='outline')
-                        eco_button(
-                            'Atualizar',
-                            salvar_status,
-                            cls='dark',
-                            props='unelevated no-caps text-white',
-                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+                    def acao_cancelar_coleta() -> None:
+                        try:
+                            cancelar_coleta(int(cid))
+                            ui.notify(f'Coleta #{cid} cancelada!', type='positive')
+                            dialog_status.close()
+                            if carregar_coletas_ref[0]:
+                                carregar_coletas_ref[0](notificar_erro=True, focar_id=int(cid))
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-between items-center w-full').style('margin-top:10px'):
+                        if st_atual not in ('REALIZADA', 'CANCELADA'):
+                            eco_button(
+                                'Cancelar coleta',
+                                acao_cancelar_coleta,
+                                cls='outline',
+                            )
+                        else:
+                            ui.element('div')
+                        with ui.row().classes('gap-2'):
+                            eco_button('Fechar', dialog_status.close, cls='outline')
+                            eco_button(
+                                'Atualizar',
+                                salvar_status,
+                                cls='dark',
+                                props='unelevated no-caps text-white',
+                            ).style('background-color: #17693A !important; color: #FFFFFF !important;')
 
             dialog_status.open()
 
@@ -1461,6 +1630,25 @@ def agendamentos() -> None:
                             return
                         h(f'<div class="card-head"><div><div class="card-title">'
                           f'Status da solicitação # {coleta_id}</div></div></div>')
+
+                        resumo_partes: list[str] = []
+                        try:
+                            detalhe_coleta = buscar_coleta_por_id(coleta_id)
+                            if detalhe_coleta.get('nomeInstituicao'):
+                                resumo_partes.append(f"Instituição: {detalhe_coleta['nomeInstituicao']}")
+                            if detalhe_coleta.get('nomeCooperativa'):
+                                resumo_partes.append(f"Cooperativa: {detalhe_coleta['nomeCooperativa']}")
+                            if detalhe_coleta.get('logradouro') and detalhe_coleta.get('bairro'):
+                                resumo_partes.append(
+                                    f"Local: {detalhe_coleta['logradouro']}, {detalhe_coleta.get('numero') or ''} - {detalhe_coleta['bairro']}"
+                                )
+                        except ApiError:
+                            pass
+
+                        if resumo_partes:
+                            h(f'<div class="muted" style="font-size:11px;margin-bottom:8px">'
+                              f'{escape(" • ".join(resumo_partes))}</div>')
+
                         try:
                             eventos = buscar_timeline_coleta(coleta_id)
                             etapas = _converter_timeline_para_etapas(eventos)
@@ -1486,7 +1674,7 @@ def agendamentos() -> None:
                     historico_container.clear()
                     with historico_container:
                         try:
-                            coletas_raw = listar_minhas_coletas()
+                            coletas_raw = _buscar_coletas_disponiveis()
                             coletas = _ordenar_coletas_canceladas_por_ultimo(coletas_raw)
                             if not coletas:
                                 h('<div class="muted" style="font-size:12px;padding:8px 0">'
@@ -2313,32 +2501,226 @@ def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) ->
 
 @ui.page('/rotas')
 def planejamento_rotas() -> None:
-    _tela_rota(
-        rota_atual='/rotas',
-        dados=m.ROTA_PLANEJAMENTO,
-        acao_topo=lambda: ui.navigate.to('/rotas/otimizada'),
-        acao_principal=lambda: ui.navigate.to('/rotas/em-andamento'),
-    )
+    with layout('/rotas'):
+        dados = m.ROTA_PLANEJAMENTO
+        page_header(dados.page_title, dados.page_subtitle)
 
+        paradas: list[dict[str, Any]] = []
+        for idx, row in enumerate(dados.tabela_paradas.rows, start=1):
+            paradas.append({
+                'ordem': row[0] if len(row) > 0 else idx,
+                'ponto': str(row[1]) if len(row) > 1 else f'Ponto #{idx}',
+                'material': str(row[2]) if len(row) > 2 else '-',
+                'volume': str(row[3]) if len(row) > 3 else '-',
+                'previsao': str(row[5]) if len(row) > 5 else '-',
+                'status': 'Pendente',
+            })
 
-@ui.page('/rotas/otimizada')
-def rota_otimizada() -> None:
-    _tela_rota(
-        rota_atual='/rotas/otimizada',
-        dados=m.ROTA_OTIMIZADA,
-        acao_topo=lambda: ui.notify('Rota recalculada com os parâmetros mais recentes!', type='positive'),
-        acao_principal=lambda: ui.navigate.to('/rotas/em-andamento'),
-    )
+        estado: dict[str, Any] = {
+            'iniciada': False,
+            'atual_idx': None,
+            'concluida': False,
+        }
 
+        def _proximo_pendente_idx() -> int | None:
+            for i, p in enumerate(paradas):
+                if p['status'] != 'Concluída':
+                    return i
+            return None
 
-@ui.page('/rotas/em-andamento')
-def coleta_em_andamento() -> None:
-    _tela_rota(
-        rota_atual='/rotas/em-andamento',
-        dados=m.ROTA_ANDAMENTO,
-        acao_topo=lambda: ui.notify('Rota recalculada com sucesso!', type='positive'),
-        acao_principal=lambda: (
-            ui.notify('Rota pausada.', type='warning'),
-            ui.navigate.to('/rotas/otimizada'),
-        ),
-    )
+        def iniciar_rota() -> None:
+            prox = _proximo_pendente_idx()
+            if prox is None:
+                ui.notify('Todas as paradas já foram concluídas.', type='info')
+                return
+            estado['iniciada'] = True
+            estado['atual_idx'] = prox
+            paradas[prox]['status'] = 'Em rota'
+            ui.notify(f'Rota iniciada! Próxima parada: {paradas[prox]["ponto"]}.', type='positive')
+            conteudo_rotas.refresh()
+
+        def pausar_rota() -> None:
+            idx = estado['atual_idx']
+            if idx is not None and 0 <= idx < len(paradas) and paradas[idx]['status'] == 'Em rota':
+                paradas[idx]['status'] = 'Pendente'
+            estado['iniciada'] = False
+            estado['atual_idx'] = None
+            ui.notify('Rota pausada. A parada voltou para a sequência.', type='warning')
+            conteudo_rotas.refresh()
+
+        def concluir_parada_atual() -> None:
+            idx = estado['atual_idx']
+            if idx is None or not (0 <= idx < len(paradas)):
+                return
+            paradas[idx]['status'] = 'Concluída'
+            prox = _proximo_pendente_idx()
+            if prox is not None:
+                estado['atual_idx'] = prox
+                paradas[prox]['status'] = 'Em rota'
+                ui.notify(
+                    f'Parada concluída! Próxima: {paradas[prox]["ponto"]}.',
+                    type='positive',
+                )
+            else:
+                estado['iniciada'] = False
+                estado['atual_idx'] = None
+                ui.notify('Todas as paradas foram concluídas! Clique em Concluir rota.', type='positive')
+            conteudo_rotas.refresh()
+
+        def concluir_rota() -> None:
+            estado['iniciada'] = False
+            estado['atual_idx'] = None
+            estado['concluida'] = True
+            ui.notify('Rota concluída com sucesso!', type='positive')
+            conteudo_rotas.refresh()
+
+        @ui.refreshable
+        def conteudo_rotas() -> None:
+            total = len(paradas)
+            concluidas = sum(1 for p in paradas if p['status'] == 'Concluída')
+            pct = int(round((concluidas / total) * 100)) if total else 0
+            atual_idx = estado['atual_idx']
+            parada_atual = (
+                paradas[atual_idx]
+                if estado['iniciada'] and atual_idx is not None and 0 <= atual_idx < total
+                else None
+            )
+
+            with grid('65'):
+                with card():
+                    h(
+                        f'<div class="card-head"><div>'
+                        f'<div class="card-title" style="font-size:16px;font-weight:600">'
+                        f'{escape(dados.nome_rota)}</div>'
+                        f'<div class="card-subtitle" style="font-size:11px;margin-top:4px">'
+                        f'{total} paradas • {escape(dados.distancia)} • '
+                        f'duração estimada de {escape(dados.duracao)}</div>'
+                        f'</div></div>'
+                    )
+
+                    if parada_atual is not None:
+                        h(
+                            f'<div style="padding:16px;border-radius:12px;background:#F5F7F8;'
+                            f'border:1px solid #E5E7EB;margin-top:6px">'
+                            f'  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">'
+                            f'        Parada atual • Ordem #{escape(str(parada_atual["ordem"]))}'
+                            f'      </div>'
+                            f'      <div style="font-size:17px;font-weight:600;color:{PRIMARY};margin-top:2px">'
+                            f'        {escape(parada_atual["ponto"])}'
+                            f'      </div>'
+                            f'    </div>'
+                            f'    <span class="badge b-blue">Em rota</span>'
+                            f'  </div>'
+                            f'  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px">'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:10px">Material</div>'
+                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["material"])}</div>'
+                            f'    </div>'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:10px">Volume estimado</div>'
+                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["volume"])}</div>'
+                            f'    </div>'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:10px">Previsão</div>'
+                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["previsao"])}</div>'
+                            f'    </div>'
+                            f'  </div>'
+                            f'</div>'
+                        )
+                        with ui.row().classes('justify-end gap-2').style('margin-top:12px'):
+                            eco_button('Concluir parada', concluir_parada_atual, cls='dark')
+                    elif concluidas == total and total > 0:
+                        h(
+                            f'<div style="padding:20px;border-radius:12px;background:#ECFDF5;'
+                            f'border:1px solid #BBF7D0;margin-top:6px">'
+                            f'  <div style="font-size:15px;font-weight:600;color:{PRIMARY}">'
+                            f'    Rota concluída'
+                            f'  </div>'
+                            f'  <div class="muted" style="font-size:12px;margin-top:4px">'
+                            f'    Todas as {total} paradas desta rota foram finalizadas.'
+                            f'  </div>'
+                            f'</div>'
+                        )
+                    else:
+                        h(
+                            '<div style="padding:20px;border-radius:12px;background:#F5F7F8;'
+                            'border:1px dashed #CBD5E1;margin-top:6px">'
+                            '  <div style="font-size:14px;font-weight:600">Nenhuma parada em atendimento</div>'
+                            '  <div class="muted" style="font-size:12px;margin-top:4px">'
+                            '    Clique em <strong>Iniciar rota</strong> no resumo ao lado para liberar '
+                            '    a primeira parada da sequência.'
+                            '  </div>'
+                            '</div>'
+                        )
+
+                with card('Resumo da rota'):
+                    h(
+                        f'<div>'
+                        f'  <div class="summary-item">'
+                        f'    <div class="summary-label">Distância total</div>'
+                        f'    <div class="summary-val">{escape(dados.distancia)}</div>'
+                        f'  </div>'
+                        f'  <div class="summary-item">'
+                        f'    <div class="summary-label">Tempo estimado</div>'
+                        f'    <div class="summary-val">{escape(dados.duracao)}</div>'
+                        f'  </div>'
+                        f'  <div class="summary-item">'
+                        f'    <div class="summary-label">Carga prevista</div>'
+                        f'    <div class="summary-val">{escape(dados.carga)}</div>'
+                        f'  </div>'
+                        f'  <div class="summary-item">'
+                        f'    <div class="summary-label">Emissão evitada</div>'
+                        f'    <div class="summary-val green">{escape(dados.co2)}</div>'
+                        f'  </div>'
+                        f'</div>'
+                        f'<div style="margin: 14px 0 16px">'
+                        f'  <div style="font-size:11px;font-weight:500;margin-bottom:6px">Execução da rota</div>'
+                        f'  <div style="display:flex;align-items:center;gap:10px">'
+                        f'    <div class="track" style="height:7px">'
+                        f'      <div class="fill" style="width:{pct}%"></div>'
+                        f'    </div>'
+                        f'    <span style="font-size:9px;color:{PRIMARY};font-weight:500;white-space:nowrap">'
+                        f'      {concluidas} de {total} paradas'
+                        f'    </span>'
+                        f'  </div>'
+                        f'</div>'
+                    )
+
+                    if estado['concluida']:
+                        eco_button('Rota concluída', lambda: None, cls='outline eco-block').props('disable')
+                    elif concluidas == total and total > 0:
+                        eco_button('Concluir rota', concluir_rota, cls='dark eco-block')
+                    elif estado['iniciada']:
+                        eco_button('Pausar rota', pausar_rota, cls='outline eco-block')
+                    else:
+                        eco_button('Iniciar rota', iniciar_rota, cls='eco-block')
+
+            with card('Sequência de paradas'):
+                rows_visiveis: list[tuple] = []
+                for i, p in enumerate(paradas):
+                    if estado['iniciada'] and i == atual_idx:
+                        continue
+                    tone = 'green' if p['status'] == 'Concluída' else 'amber'
+                    rows_visiveis.append((
+                        p['ordem'],
+                        p['ponto'],
+                        p['material'],
+                        p['volume'],
+                        m.Badge(p['status'], tone),
+                        p['previsao'],
+                    ))
+
+                if rows_visiveis:
+                    data_table(
+                        m.Table(
+                            columns=('Ordem', 'Ponto de coleta', 'Material', 'Volume', 'Status', 'Previsão'),
+                            rows=rows_visiveis,
+                        )
+                    )
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma outra parada na sequência.</div>')
+
+        conteudo_rotas()
