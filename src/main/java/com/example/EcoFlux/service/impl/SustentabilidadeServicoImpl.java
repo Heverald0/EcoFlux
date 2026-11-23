@@ -5,10 +5,16 @@ import com.example.EcoFlux.dto.request.response.EcoScoreResposta;
 import com.example.EcoFlux.dto.request.response.EcoSeloResposta;
 import com.example.EcoFlux.dto.request.response.ImpactoPorMaterialResposta;
 import com.example.EcoFlux.entity.Coleta;
+import com.example.EcoFlux.entity.Instituicao;
 import com.example.EcoFlux.entity.Usuario;
+import com.example.EcoFlux.entity.enums.PerfilUsuario;
 import com.example.EcoFlux.entity.enums.StatusCadastro;
 import com.example.EcoFlux.entity.enums.TipoMaterial;
+import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
+import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
 import com.example.EcoFlux.repository.ColetaRepositorio;
+import com.example.EcoFlux.repository.InstituicaoRepositorio;
+import com.example.EcoFlux.repository.MembroInstituicaoRepositorio;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import com.example.EcoFlux.service.SustentabilidadeServico;
 import lombok.RequiredArgsConstructor;
@@ -29,8 +35,9 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
 
     private final ColetaRepositorio coletaRepositorio;
     private final UsuarioRepositorio usuarioRepositorio;
+    private final InstituicaoRepositorio instituicaoRepositorio;
+    private final MembroInstituicaoRepositorio membroRepositorio;
 
-    // Fatores médios ambientais por kg reciclado
     private static final BigDecimal KG_CO2_POR_ARVORE_ANO = new BigDecimal("22.00");
     private static final BigDecimal KWH_ECONOMIZADO_POR_KG = new BigDecimal("5.30");
     private static final BigDecimal LITROS_AGUA_POR_KG = new BigDecimal("28.00");
@@ -53,13 +60,32 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
 
     @Override
     @Transactional(readOnly = true)
+    public EcoImpactoResposta calcularImpactoInstituicao(Long instituicaoId, Usuario usuarioAutenticado) {
+        validarAcessoMetricasInstituicao(instituicaoId, usuarioAutenticado);
+        List<Coleta> concluidas = filtrarColetasConcluidas(coletaRepositorio.findAllByInstituicaoId(instituicaoId));
+        return montarImpacto(concluidas);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public EcoScoreResposta calcularEcoScoreUsuario(Usuario usuario) {
         List<Coleta> concluidas = filtrarColetasConcluidas(
                 coletaRepositorio.findAllRelacionadasAoUsuarioId(usuario.getId())
         );
+        return montarEcoScore(usuario.getId(), usuario.getNome(), concluidas);
+    }
 
+    @Override
+    @Transactional(readOnly = true)
+    public EcoScoreResposta calcularEcoScoreInstituicao(Long instituicaoId, Usuario usuarioAutenticado) {
+        Instituicao instituicao = validarAcessoMetricasInstituicao(instituicaoId, usuarioAutenticado);
+        List<Coleta> concluidas = filtrarColetasConcluidas(coletaRepositorio.findAllByInstituicaoId(instituicaoId));
+        return montarEcoScore(instituicao.getId(), instituicao.getNome(), concluidas);
+    }
+
+    private EcoScoreResposta montarEcoScore(Long alvoId, String nomeAlvo, List<Coleta> concluidas) {
         BigDecimal totalKg = concluidas.stream()
-                .map(Coleta::getQuantidadeEstimadaKg)
+                .map(this::obterPesoEfetivoKg)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         int diversidadeMateriais = (int) concluidas.stream()
@@ -67,7 +93,6 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
                 .distinct()
                 .count();
 
-        // Fórmula EcoScore: 10 pts/kg + 50 pts/coleta concluída + 100 pts/material distinto
         int pontosPeso = totalKg.multiply(BigDecimal.TEN).setScale(0, RoundingMode.HALF_UP).intValue();
         int pontosColetas = concluidas.size() * 50;
         int pontosDiversidade = diversidadeMateriais * 100;
@@ -98,8 +123,8 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
         int progressoNivel = Math.min(100, (int) (((double) (pontuacaoTotal - pisoNivel) / (tetoNivel - pisoNivel)) * 100));
 
         return new EcoScoreResposta(
-                usuario.getId(),
-                usuario.getNome(),
+                alvoId,
+                nomeAlvo,
                 pontuacaoTotal,
                 nivel,
                 tetoNivel,
@@ -172,6 +197,25 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
         );
     }
 
+    private Instituicao validarAcessoMetricasInstituicao(Long instituicaoId, Usuario usuarioAutenticado) {
+        Instituicao instituicao = instituicaoRepositorio.findById(instituicaoId)
+                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado("Instituicao nao encontrada."));
+
+        boolean ehResponsavel = instituicao.getUsuarioResponsavel().getId().equals(usuarioAutenticado.getId());
+        boolean ehMembroAtivo = membroRepositorio.existsByInstituicaoIdAndUsuarioIdAndAtivoTrue(
+                instituicaoId, usuarioAutenticado.getId());
+        boolean ehAdminGeral = usuarioAutenticado.getPerfil() == PerfilUsuario.ADMINISTRADOR;
+
+        if (!ehResponsavel && !ehMembroAtivo && !ehAdminGeral) {
+            throw new ExcecaoConflitoNegocio("Acesso negado: voce precisa ser morador/membro vinculado ou responsavel por esta instituicao para visualizar suas metricas.");
+        }
+        return instituicao;
+    }
+
+    private BigDecimal obterPesoEfetivoKg(Coleta coleta) {
+        return coleta.getPesoRealKg() != null ? coleta.getPesoRealKg() : coleta.getQuantidadeEstimadaKg();
+    }
+
     private List<Coleta> filtrarColetasConcluidas(List<Coleta> coletas) {
         return coletas.stream()
                 .filter(c -> c.getStatus() != null &&
@@ -192,7 +236,7 @@ public class SustentabilidadeServicoImpl implements SustentabilidadeServico {
             if (lista.isEmpty()) continue;
 
             BigDecimal pesoMaterial = lista.stream()
-                    .map(Coleta::getQuantidadeEstimadaKg)
+                    .map(this::obterPesoEfetivoKg)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
             BigDecimal co2Material = pesoMaterial

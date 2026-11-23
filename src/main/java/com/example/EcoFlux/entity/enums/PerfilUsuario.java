@@ -5,5 +5,6 @@ public enum PerfilUsuario {
     INSTITUICAO,
     EMPRESA,
     COOPERATIVA,
+    MOTORISTA,
     ADMINISTRADOR
 }

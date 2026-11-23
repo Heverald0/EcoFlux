@@ -2,8 +2,10 @@ package com.example.EcoFlux.controller;
 
 import com.example.EcoFlux.dto.request.AtualizarStatusColetaRequisicao;
 import com.example.EcoFlux.dto.request.ColetaAgendamentoRequisicao;
+import com.example.EcoFlux.dto.request.ConcluirColetaMotoristaRequisicao;
 import com.example.EcoFlux.dto.request.response.ColetaResposta;
 import com.example.EcoFlux.dto.request.response.EventoTimelineColetaResposta;
+import com.example.EcoFlux.dto.request.response.RotaMotoristaItemResposta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.StatusColeta;
 import com.example.EcoFlux.service.ColetaServico;
@@ -49,6 +51,13 @@ public class ColetaControlador {
         return ResponseEntity.ok(coletas);
     }
 
+    @GetMapping("/minha-rota")
+    public ResponseEntity<List<RotaMotoristaItemResposta>> listarMinhaRota(
+            @AuthenticationPrincipal Usuario motoristaAutenticado
+    ) {
+        return ResponseEntity.ok(coletaServico.listarMinhaRotaMotorista(motoristaAutenticado));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<ColetaResposta> buscarPorId(
             @PathVariable Long id,
@@ -56,6 +65,24 @@ public class ColetaControlador {
     ) {
         ColetaResposta resposta = coletaServico.buscarPorId(id, usuarioAutenticado);
         return ResponseEntity.ok(resposta);
+    }
+
+    @PatchMapping("/{id}/atribuir-motorista")
+    public ResponseEntity<ColetaResposta> atribuirMotorista(
+            @PathVariable Long id,
+            @RequestParam Long motoristaId,
+            @AuthenticationPrincipal Usuario usuarioAutenticado
+    ) {
+        return ResponseEntity.ok(coletaServico.atribuirMotorista(id, motoristaId, usuarioAutenticado));
+    }
+
+    @PatchMapping("/{id}/concluir-entrega")
+    public ResponseEntity<ColetaResposta> concluirEntregaMotorista(
+            @PathVariable Long id,
+            @RequestBody @Valid ConcluirColetaMotoristaRequisicao requisicao,
+            @AuthenticationPrincipal Usuario motoristaAutenticado
+    ) {
+        return ResponseEntity.ok(coletaServico.concluirEntregaMotorista(id, requisicao, motoristaAutenticado));
     }
 
     @PatchMapping("/{id}/status")

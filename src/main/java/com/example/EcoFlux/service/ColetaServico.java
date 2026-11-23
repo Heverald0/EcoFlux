@@ -2,8 +2,10 @@ package com.example.EcoFlux.service;
 
 import com.example.EcoFlux.dto.request.AtualizarStatusColetaRequisicao;
 import com.example.EcoFlux.dto.request.ColetaAgendamentoRequisicao;
+import com.example.EcoFlux.dto.request.ConcluirColetaMotoristaRequisicao;
 import com.example.EcoFlux.dto.request.response.ColetaResposta;
 import com.example.EcoFlux.dto.request.response.EventoTimelineColetaResposta;
+import com.example.EcoFlux.dto.request.response.RotaMotoristaItemResposta;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.StatusColeta;
 
@@ -17,4 +19,8 @@ public interface ColetaServico {
     ColetaResposta atualizarStatus(Long id, AtualizarStatusColetaRequisicao requisicao, Usuario usuarioAutenticado);
     ColetaResposta cancelarColeta(Long id, Usuario usuarioAutenticado);
     List<EventoTimelineColetaResposta> consultarTimeline(Long coletaId, Usuario usuarioAutenticado);
+
+    ColetaResposta atribuirMotorista(Long coletaId, Long motoristaId, Usuario usuarioAutenticado);
+    List<RotaMotoristaItemResposta> listarMinhaRotaMotorista(Usuario motoristaAutenticado);
+    ColetaResposta concluirEntregaMotorista(Long coletaId, ConcluirColetaMotoristaRequisicao requisicao, Usuario motoristaAutenticado);
 }
