@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -27,5 +28,13 @@ public class EcoImpactoControlador {
             @AuthenticationPrincipal Usuario usuarioAutenticado
     ) {
         return ResponseEntity.ok(sustentabilidadeServico.calcularImpactoUsuario(usuarioAutenticado));
+    }
+
+    @GetMapping("/instituicao/{instituicaoId}")
+    public ResponseEntity<EcoImpactoResposta> obterImpactoInstituicao(
+            @PathVariable Long instituicaoId,
+            @AuthenticationPrincipal Usuario usuarioAutenticado
+    ) {
+        return ResponseEntity.ok(sustentabilidadeServico.calcularImpactoInstituicao(instituicaoId, usuarioAutenticado));
     }
 }
