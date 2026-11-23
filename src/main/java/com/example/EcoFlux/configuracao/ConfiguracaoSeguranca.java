@@ -64,6 +64,10 @@ public class ConfiguracaoSeguranca {
                 .requestMatchers(HttpMethod.GET, "/api/v1/materiais/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/pontos-coleta/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/cooperativas/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/educativo/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/ecoimpacto").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/ecoscore/ranking").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/ecoselos/catalogo").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(filtroSeguranca, UsernamePasswordAuthenticationFilter.class);
