@@ -37,6 +37,9 @@ public class Coleta {
     @Column(name = "quantidade_estimada_kg", nullable = false, precision = 10, scale = 2)
     private BigDecimal quantidadeEstimadaKg;
 
+    @Column(name = "peso_real_kg", precision = 10, scale = 2)
+    private BigDecimal pesoRealKg;
+
     @Column(length = 255)
     private String observacoes;
 
@@ -73,6 +76,22 @@ public class Coleta {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "cooperativa_id")
     private Instituicao cooperativa;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "motorista_id")
+    private Usuario motorista;
+
+    @Column(name = "nome_recebedor", length = 150)
+    private String nomeRecebedor;
+
+    @Column(name = "documento_recebedor", length = 20)
+    private String documentoRecebedor;
+
+    @Column(name = "assinatura_digital", columnDefinition = "TEXT")
+    private String assinaturaDigital;
+
+    @Column(name = "data_conclusao")
+    private LocalDateTime dataConclusao;
 
     @CreationTimestamp
     @Column(name = "data_criacao", nullable = false, updatable = false)
