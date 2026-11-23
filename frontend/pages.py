@@ -1,4 +1,4 @@
-"""As 10 telas internas do EcoFlux.
+"""As telas internas do EcoFlux.
 
 Cada tela monta o layout base e preenche o conteudo com os componentes de
 ``ui_kit`` e os dados de ``mocks``.
@@ -51,7 +51,7 @@ from ui_kit import (
     PRIMARY, bar_chart, card, chip_select, data_table, donut, donut_with_legend,
     dot_steps, form_field, grid, h, icon, item_list, kpi_row, layout, metric_list,
     eco_button, numbered_steps, page_header, progress_footer, rank_list,
-    route_map_html, stacked_metric_list, timeline,
+    stacked_metric_list, timeline,
 )
 
 _MAPA_MATERIAL_ENUM = {
@@ -153,6 +153,8 @@ _STATUS_CADASTRO_OPCOES = {
 }
 
 _MESES_CURTOS = ('Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez')
+
+_CONFIRMACOES_ROTAS_ADMIN: list[dict[str, Any]] = []
 
 
 def _obrigatorios(**campos) -> bool:
@@ -2383,6 +2385,63 @@ def administracao() -> None:
 
         with grid('65'):
             with ui.element('div').classes('stack'):
+                with card('Coletas finalizadas pelo motorista (Aguardando confirmação)'):
+                    @ui.refreshable
+                    def render_confirmacoes_rotas() -> None:
+                        if not _CONFIRMACOES_ROTAS_ADMIN:
+                            h('<div class="muted" style="font-size:13px;padding:8px 0">'
+                              'Nenhuma coleta finalizada pelo motorista aguardando validação no momento.</div>')
+                            return
+
+                        with ui.element('div').classes('list-divided'):
+                            for reg in _CONFIRMACOES_ROTAS_ADMIN:
+                                st = reg['status']
+                                tone = 'green' if st == 'CONFIRMADA' else ('gray' if st == 'NEGADA' else 'amber')
+                                st_lbl = (
+                                    'Confirmada' if st == 'CONFIRMADA'
+                                    else ('Negada' if st == 'NEGADA' else 'Aguardando')
+                                )
+                                meta = (
+                                    f'{reg["material"]} • {reg["volume"]} • '
+                                    f'Assinado por {reg["responsavel"]} às {reg["horario"]}'
+                                )
+                                if reg.get('observacao'):
+                                    meta += f' • {reg["observacao"]}'
+
+                                with ui.element('div').classes('item'):
+                                    with ui.element('div').style('flex:1;min-width:0'):
+                                        h(
+                                            f'<div class="item-title" style="font-size:15px;font-weight:600">'
+                                            f'Motorista finalizou coleta em {escape(reg["ponto"])}</div>'
+                                            f'<div class="item-meta" style="font-size:13px;margin-top:4px">'
+                                            f'{escape(meta)}</div>'
+                                        )
+                                    h(f'<span class="badge b-{tone}" style="margin-right:8px;font-size:12px">{st_lbl}</span>')
+                                    if st == 'PENDENTE':
+                                        def _decidir(item: dict[str, Any], novo: str) -> None:
+                                            item['status'] = novo
+                                            ui.notify(
+                                                f'Coleta em {item["ponto"]} marcada como {novo.lower()}.',
+                                                type='positive' if novo == 'CONFIRMADA' else 'warning',
+                                            )
+                                            render_confirmacoes_rotas.refresh()
+
+                                        with ui.row().classes('gap-1 items-center'):
+                                            ui.button(
+                                                'Confirmar',
+                                                on_click=lambda _e, r=reg: _decidir(r, 'CONFIRMADA'),
+                                            ).props('flat dense no-caps').classes('btn-ghost').style(
+                                                f'border-color:{PRIMARY} !important;color:{PRIMARY} !important;'
+                                            )
+                                            ui.button(
+                                                'Negar',
+                                                on_click=lambda _e, r=reg: _decidir(r, 'NEGADA'),
+                                            ).props('flat dense no-caps').classes('btn-ghost').style(
+                                                'border-color:#B91C1C !important;color:#B91C1C !important;'
+                                            )
+
+                    render_confirmacoes_rotas()
+
                 with card('Instituições'):
                     inst_box_ref[0] = ui.element('div').classes('w-full')
 
@@ -2437,68 +2496,6 @@ def administracao() -> None:
         carregar_listas_admin()
 
 
-def _tela_rota(rota_atual: str, dados: m.RotaView, acao_topo, acao_principal) -> None:
-    """3 telas para rotas."""
-    with layout(rota_atual):
-        page_header(dados.page_title, dados.page_subtitle)
-
-        with grid('65'):
-            with card():
-                with ui.element('div').classes('card-head'):
-                    h(f'<div>'
-                      f'<div class="card-title" style="font-size:16px;font-weight:600">'
-                      f'{escape(dados.nome_rota)}</div>'
-                      f'<div class="card-subtitle" style="font-size:11px;margin-top:4px">'
-                      f'{dados.paradas_total} paradas • {escape(dados.distancia)} • '
-                      f'duração estimada de {escape(dados.duracao)}</div>'
-                      f'</div>')
-                    eco_button(dados.btn_topo, acao_topo).style('min-width:155px;height:32px')
-
-                route_map_html()
-
-            with card('Resumo da rota'):
-                h(f'''
-                <div>
-                  <div class="summary-item">
-                    <div class="summary-label">Distância total</div>
-                    <div class="summary-val">{escape(dados.distancia)}</div>
-                  </div>
-                  <div class="summary-item">
-                    <div class="summary-label">Tempo estimado</div>
-                    <div class="summary-val">{escape(dados.duracao)}</div>
-                  </div>
-                  <div class="summary-item">
-                    <div class="summary-label">Carga prevista</div>
-                    <div class="summary-val">{escape(dados.carga)}</div>
-                  </div>
-                  <div class="summary-item">
-                    <div class="summary-label">Emissão evitada</div>
-                    <div class="summary-val green">{escape(dados.co2)}</div>
-                  </div>
-                </div>
-                ''')
-
-                pct = int((dados.paradas_concluidas / dados.paradas_total) * 100)
-                h(f'''
-                <div style="margin: 14px 0 16px">
-                  <div style="font-size:11px;font-weight:500;margin-bottom:6px">Execução da rota</div>
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <div class="track" style="height:7px">
-                      <div class="fill" style="width:{pct}%"></div>
-                    </div>
-                    <span style="font-size:9px;color:{PRIMARY};font-weight:500;white-space:nowrap">
-                      {dados.paradas_concluidas} de {dados.paradas_total} paradas
-                    </span>
-                  </div>
-                </div>
-                ''')
-
-                eco_button(dados.btn_acao, acao_principal, cls='eco-block')
-
-        with card('Sequência de paradas'):
-            data_table(dados.tabela_paradas)
-
-
 @ui.page('/rotas')
 def planejamento_rotas() -> None:
     with layout('/rotas'):
@@ -2521,6 +2518,8 @@ def planejamento_rotas() -> None:
             'atual_idx': None,
             'concluida': False,
         }
+
+        dialog_assinatura = ui.dialog()
 
         def _proximo_pendente_idx() -> int | None:
             for i, p in enumerate(paradas):
@@ -2548,24 +2547,125 @@ def planejamento_rotas() -> None:
             ui.notify('Rota pausada. A parada voltou para a sequência.', type='warning')
             conteudo_rotas.refresh()
 
-        def concluir_parada_atual() -> None:
+        def abrir_modal_assinatura() -> None:
             idx = estado['atual_idx']
             if idx is None or not (0 <= idx < len(paradas)):
                 return
-            paradas[idx]['status'] = 'Concluída'
-            prox = _proximo_pendente_idx()
-            if prox is not None:
-                estado['atual_idx'] = prox
-                paradas[prox]['status'] = 'Em rota'
-                ui.notify(
-                    f'Parada concluída! Próxima: {paradas[prox]["ponto"]}.',
-                    type='positive',
+
+            parada = paradas[idx]
+            dialog_assinatura.clear()
+            canvas_id = f'sig-canvas-{idx}-{int(datetime.now().timestamp())}'
+
+            with dialog_assinatura, ui.card().style('width:480px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:4px">Assinatura de confirmação</div>'
+                    f'<div class="muted" style="font-size:12px;margin-bottom:14px">'
+                    f'<strong>{escape(parada["ponto"])}</strong> • '
+                    f'{escape(parada["material"])} ({escape(parada["volume"])})</div>'
                 )
-            else:
-                estado['iniciada'] = False
-                estado['atual_idx'] = None
-                ui.notify('Todas as paradas foram concluídas! Clique em Concluir rota.', type='positive')
-            conteudo_rotas.refresh()
+
+                with ui.element('div').classes('form-grid'):
+                    campo_resp = form_field(
+                        'Nome do responsável no local',
+                        placeholder='Ex: Maria Silva',
+                    )
+                    campo_obs = form_field(
+                        'Observação (opcional)',
+                        placeholder='Ex: Volume conferido na retirada',
+                    )
+
+                    with ui.element('div'):
+                        h(
+                            f'<label class="form-label">Assinatura</label>'
+                            f'<div style="border:1px dashed #94A3B8;border-radius:10px;background:#F8FAFC;overflow:hidden">'
+                            f'  <canvas id="{canvas_id}" width="430" height="130" '
+                            f'    style="width:100%;height:130px;display:block;cursor:crosshair;touch-action:none"></canvas>'
+                            f'</div>'
+                            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">'
+                            f'  <span class="muted" style="font-size:10px">Assine com o mouse ou dedo no quadro acima</span>'
+                            f'  <button type="button" onclick="const c=document.getElementById(\'{canvas_id}\');'
+                            f'    if(c){{c.getContext(\'2d\').clearRect(0,0,c.width,c.height);}}" '
+                            f'    style="font-size:11px;color:{PRIMARY};background:none;border:none;cursor:pointer">Limpar</button>'
+                            f'</div>'
+                        )
+
+                    ui.run_javascript(f'''
+                        (() => {{
+                            const c = document.getElementById("{canvas_id}");
+                            if (!c) return;
+                            const ctx = c.getContext("2d");
+                            ctx.lineWidth = 2;
+                            ctx.lineCap = "round";
+                            ctx.strokeStyle = "#0F172A";
+                            let drawing = false;
+                            const pos = (e) => {{
+                                const r = c.getBoundingClientRect();
+                                const t = e.touches ? e.touches[0] : e;
+                                return {{
+                                    x: (t.clientX - r.left) * (c.width / r.width),
+                                    y: (t.clientY - r.top) * (c.height / r.height),
+                                }};
+                            }};
+                            const start = (e) => {{ drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }};
+                            const move = (e) => {{ if (!drawing) return; e.preventDefault(); const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }};
+                            const stop = () => {{ drawing = false; }};
+                            c.addEventListener("mousedown", start);
+                            c.addEventListener("mousemove", move);
+                            window.addEventListener("mouseup", stop);
+                            c.addEventListener("touchstart", start, {{ passive: false }});
+                            c.addEventListener("touchmove", move, {{ passive: false }});
+                            c.addEventListener("touchend", stop);
+                        }})();
+                    ''')
+
+                    def confirmar_assinatura() -> None:
+                        responsavel = (campo_resp.value or '').strip()
+                        if not responsavel:
+                            ui.notify('Informe o nome do responsável pela assinatura.', type='warning')
+                            return
+
+                        parada['status'] = 'Concluída'
+                        _CONFIRMACOES_ROTAS_ADMIN.insert(0, {
+                            'id': len(_CONFIRMACOES_ROTAS_ADMIN) + 1,
+                            'rota': dados.nome_rota,
+                            'ponto': parada['ponto'],
+                            'material': parada['material'],
+                            'volume': parada['volume'],
+                            'responsavel': responsavel,
+                            'observacao': (campo_obs.value or '').strip(),
+                            'horario': datetime.now().strftime('%H:%M'),
+                            'status': 'PENDENTE',
+                        })
+
+                        prox = _proximo_pendente_idx()
+                        if prox is not None:
+                            estado['atual_idx'] = prox
+                            paradas[prox]['status'] = 'Em rota'
+                            ui.notify(
+                                f'Assinatura registrada! Próxima parada liberada: {paradas[prox]["ponto"]}.',
+                                type='positive',
+                            )
+                        else:
+                            estado['iniciada'] = False
+                            estado['atual_idx'] = None
+                            ui.notify(
+                                'Última parada assinada! Clique em Concluir rota.',
+                                type='positive',
+                            )
+
+                        dialog_assinatura.close()
+                        conteudo_rotas.refresh()
+
+                    with ui.row().classes('justify-end gap-2').style('margin-top:10px'):
+                        eco_button('Cancelar', dialog_assinatura.close, cls='outline')
+                        eco_button(
+                            'Assinar e liberar próxima',
+                            confirmar_assinatura,
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+            dialog_assinatura.open()
 
         def concluir_rota() -> None:
             estado['iniciada'] = False
@@ -2630,7 +2730,7 @@ def planejamento_rotas() -> None:
                             f'</div>'
                         )
                         with ui.row().classes('justify-end gap-2').style('margin-top:12px'):
-                            eco_button('Concluir parada', concluir_parada_atual, cls='dark')
+                            eco_button('Finalizar e assinar', abrir_modal_assinatura, cls='dark')
                     elif concluidas == total and total > 0:
                         h(
                             f'<div style="padding:20px;border-radius:12px;background:#ECFDF5;'
