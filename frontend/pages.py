@@ -45,6 +45,16 @@ from api_client import (
     listar_usuarios,
     obter_nome_atual,
     obter_token,
+    atualizar_sessao_atual,
+    cadastrar_instituicao,
+    desvincular_membro_instituicao,
+    listar_membros_instituicao,
+    listar_meus_vinculos_instituicao,
+    vincular_membro_instituicao,
+    atribuir_motorista_coleta,
+    concluir_entrega_motorista,
+    listar_minha_rota_motorista,
+    obter_perfil_atual,
 )
 import mocks as m
 from ui_kit import (
@@ -127,6 +137,8 @@ _STATUS_COLETA_OPCOES = {
     'EM_ANALISE': 'Em análise',
     'AGENDADA': 'Agendada',
     'EM_ROTA': 'Em rota',
+    'EM_ANDAMENTO': 'Em andamento',
+    'CONCLUIDA': 'Concluída',
     'REALIZADA': 'Realizada',
     'CANCELADA': 'Cancelada',
 }
@@ -373,12 +385,11 @@ def _converter_timeline_para_etapas(eventos: list[dict[str, Any]]) -> list[m.Ste
         etapas.append(m.Step(title=titulo, meta=' • '.join(meta_partes), done=True))
 
     fluxo_padrao = [
-        ('EM_ANALISE', 'Em análise'),
         ('AGENDADA', 'Agendada'),
         ('EM_ROTA', 'Em rota'),
-        ('REALIZADA', 'Realizada'),
+        ('CONCLUIDA', 'Concluída'),
     ]
-    if ultimo_status not in ('REALIZADA', 'CANCELADA'):
+    if ultimo_status not in ('CONCLUIDA', 'REALIZADA', 'CANCELADA'):
         ja_feitos = {str(e.get('statusNovo') or '').upper() for e in eventos}
         for cod_st, nome_st in fluxo_padrao:
             if cod_st not in ja_feitos:
@@ -452,7 +463,8 @@ def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
 
     if tem_coletas and len(kpis_base) >= 2:
         realizadas = [
-            c for c in coletas if str(c.get('status') or '').strip().upper() == 'REALIZADA'
+            c for c in coletas
+            if str(c.get('status') or '').strip().upper() in ('REALIZADA', 'CONCLUIDA')
         ]
         total_kg = sum(
             float(c.get('quantidadeEstimadaKg') or 0) for c in realizadas
@@ -1077,12 +1089,91 @@ def dashboard() -> None:
 
 @ui.page('/pontos-de-coleta')
 def pontos_de_coleta() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    atualizar_sessao_atual()
+    perfil_atual = (obter_perfil_atual() or '').upper()
+    pode_gerenciar = perfil_atual in ('INSTITUICAO', 'EMPRESA', 'ADMINISTRADOR')
+
     with layout('/pontos-de-coleta'):
-        page_header('Pontos de coleta',
-                    'Gerencie e visualize os pontos de descarte cadastrados na plataforma')
+        page_header(
+            'Pontos de coleta',
+            'Cadastre, filtre e gerencie os pontos de descarte na plataforma'
+            if pode_gerenciar
+            else 'Consulte e filtre os pontos de descarte disponíveis na plataforma',
+        )
 
         dialog_editar = ui.dialog()
         carregar_tabela_ref: list[Any] = [None]
+
+        mapa_inst_usuario: dict[int, str] = {}
+        if pode_gerenciar:
+            try:
+                lista_inst = listar_instituicoes() if eh_administrador() else listar_minhas_instituicoes()
+                for inst in lista_inst:
+                    if inst.get('id') is not None:
+                        iid = int(inst['id'])
+                        mapa_inst_usuario[iid] = str(inst.get('nome') or f'Instituição #{iid}')
+            except ApiError:
+                pass
+
+        def _montar_payload_ponto_campos(
+            *,
+            nome: str,
+            responsavel: str,
+            telefone: str,
+            horarios: str,
+            logradouro: str,
+            numero: str,
+            bairro: str,
+            cidade: str,
+            estado: str,
+            cep: str,
+            materiais_selecionados: set[str],
+            instituicao_id: int | None = None,
+            latitude: float = -16.3766,
+            longitude: float = -39.5808,
+        ) -> dict[str, Any] | None:
+            tel_digitos = re.sub(r'\D', '', telefone or '')
+            if tel_digitos and len(tel_digitos) not in (10, 11):
+                ui.notify('Informe o telefone com DDD (10 ou 11 dígitos, ex: 73999999999).', type='warning')
+                return None
+
+            uf_val = (estado or '').strip().upper()
+            if len(uf_val) != 2 or not uf_val.isalpha():
+                ui.notify('Informe a UF com 2 letras (ex: BA).', type='warning')
+                return None
+
+            cep_digitos = re.sub(r'\D', '', cep or '')
+            if len(cep_digitos) != 8:
+                ui.notify('Informe um CEP válido com 8 dígitos (somente números).', type='warning')
+                return None
+
+            mats_enum = _normalizar_materiais(materiais_selecionados)
+            if not mats_enum:
+                ui.notify('Selecione ao menos um material aceito.', type='warning')
+                return None
+
+            payload: dict[str, Any] = {
+                'nome': nome.strip()[:150],
+                'nomeResponsavel': responsavel.strip()[:120],
+                'telefoneContato': tel_digitos or None,
+                'horarioFuncionamento': (horarios or '').strip()[:120] or 'Seg - Sex 08h às 17h',
+                'logradouro': logradouro.strip()[:150],
+                'numero': numero.strip()[:30],
+                'bairro': bairro.strip()[:100],
+                'cidade': cidade.strip()[:100],
+                'estado': uf_val,
+                'cep': cep_digitos,
+                'latitude': latitude,
+                'longitude': longitude,
+                'materiaisAceitos': mats_enum,
+            }
+            if instituicao_id is not None:
+                payload['instituicaoId'] = int(instituicao_id)
+            return payload
 
         def abrir_modal_edicao(ponto: dict[str, Any]) -> None:
             dialog_editar.clear()
@@ -1090,16 +1181,6 @@ def pontos_de_coleta() -> None:
             if not ponto_id:
                 ui.notify('Ponto sem ID válido para edição.', type='warning')
                 return
-
-            end_inicial = ', '.join(
-                parte for parte in [
-                    str(ponto.get('logradouro') or '').strip(),
-                    str(ponto.get('numero') or '').strip(),
-                    str(ponto.get('bairro') or '').strip(),
-                    str(ponto.get('cidade') or '').strip(),
-                ]
-                if parte
-            )
 
             mats_iniciais = {
                 _ENUM_PARA_CHIP.get(str(x).upper(), str(x).capitalize())
@@ -1111,18 +1192,50 @@ def pontos_de_coleta() -> None:
             if status_atual not in _STATUS_PONTO_OPCOES:
                 status_atual = 'ATIVO'
 
-            with dialog_editar, ui.card().style('width:540px;max-width:95vw;border-radius:16px;padding:20px'):
+            inst_atual = ponto.get('idInstituicao')
+            inst_inicial = int(inst_atual) if inst_atual is not None and int(inst_atual) in mapa_inst_usuario else None
+
+            with dialog_editar, ui.card().style('width:580px;max-width:95vw;border-radius:16px;padding:20px'):
                 h(f'<div class="card-title" style="margin-bottom:12px">Editar ponto #{ponto_id}</div>')
                 with ui.element('div').classes('form-grid'):
                     ed_nome = form_field('Nome do ponto', value=str(ponto.get('nome') or ''))
-                    ed_end = form_field(
-                        'Endereço completo',
-                        value=end_inicial,
-                        placeholder='Rua, Numero, Bairro, Cidade',
-                    )
                     with ui.element('div').classes('form-grid cols-2'):
                         ed_resp = form_field('Responsável', value=str(ponto.get('nomeResponsavel') or ''))
-                        ed_hor = form_field('Horários', value=str(ponto.get('horarioFuncionamento') or ''))
+                        ed_tel = form_field(
+                            'Telefone de contato',
+                            value=re.sub(r'\D', '', str(ponto.get('telefoneContato') or '')),
+                            placeholder='73999999999',
+                            props='mask="###########" inputmode="numeric"',
+                        )
+
+                    ed_hor = form_field('Horário de funcionamento', value=str(ponto.get('horarioFuncionamento') or ''))
+
+                    with ui.element('div').classes('form-grid cols-2'):
+                        ed_log = form_field('Logradouro', value=str(ponto.get('logradouro') or ''))
+                        ed_num = form_field('Número', value=str(ponto.get('numero') or ''))
+
+                    with ui.element('div').classes('form-grid cols-2'):
+                        ed_bai = form_field('Bairro', value=str(ponto.get('bairro') or ''))
+                        ed_cid = form_field('Cidade', value=str(ponto.get('cidade') or ''))
+
+                    with ui.element('div').classes('form-grid cols-2'):
+                        ed_uf = form_field('UF', value=str(ponto.get('estado') or 'BA'), props='mask="AA"')
+                        ed_cep = form_field(
+                            'CEP',
+                            value=re.sub(r'\D', '', str(ponto.get('cep') or '')),
+                            props='mask="########" inputmode="numeric"',
+                        )
+
+                    if mapa_inst_usuario:
+                        with ui.element('div'):
+                            h('<label class="form-label">Instituição vinculada (opcional)</label>')
+                            ed_inst = ui.select(
+                                mapa_inst_usuario,
+                                value=inst_inicial,
+                            ).props('outlined dense hide-bottom-space options-dense clearable').classes('eco-field')
+                    else:
+                        ed_inst = None
+
                     with ui.element('div'):
                         h('<label class="form-label">Materiais aceitos</label>')
                         ed_mats = chip_select(m.MATERIAIS_ACEITOS, mats_iniciais)
@@ -1135,41 +1248,52 @@ def pontos_de_coleta() -> None:
                                 value=status_atual,
                             ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
                         ed_motivo = form_field(
-                            'Motivo do status (opcional)',
+                            'Motivo (obrigatório em Manutenção)',
                             value=str(ponto.get('motivoStatus') or ''),
-                            placeholder='Ex: Manutenção programada',
+                            placeholder='Ex: Reforma na estrutura',
                         )
 
                     def salvar_edicao() -> None:
-                        if not _obrigatorios(nome=ed_nome, endereço=ed_end, responsável=ed_resp):
-                            return
-                        if not ed_mats:
-                            ui.notify('Selecione ao menos um material aceito.', type='warning')
+                        if not _obrigatorios(
+                            nome=ed_nome,
+                            responsável=ed_resp,
+                            horário=ed_hor,
+                            logradouro=ed_log,
+                            número=ed_num,
+                            bairro=ed_bai,
+                            cidade=ed_cid,
+                            UF=ed_uf,
+                            CEP=ed_cep,
+                        ):
                             return
 
-                        payload = _montar_payload_ponto(
+                        novo_status = str(ed_status.value or status_atual).upper()
+                        motivo_novo = (ed_motivo.value or '').strip()
+                        if novo_status == 'MANUTENCAO' and not motivo_novo:
+                            ui.notify('Informe o motivo ao colocar o ponto em Manutenção.', type='warning')
+                            return
+
+                        payload = _montar_payload_ponto_campos(
                             nome=ed_nome.value,
-                            endereco_completo=ed_end.value,
                             responsavel=ed_resp.value,
+                            telefone=ed_tel.value,
                             horarios=ed_hor.value,
+                            logradouro=ed_log.value,
+                            numero=ed_num.value,
+                            bairro=ed_bai.value,
+                            cidade=ed_cid.value,
+                            estado=ed_uf.value,
+                            cep=ed_cep.value,
                             materiais_selecionados=ed_mats,
+                            instituicao_id=int(ed_inst.value) if ed_inst is not None and ed_inst.value is not None else inst_atual,
+                            latitude=float(ponto['latitude']) if ponto.get('latitude') is not None else -16.3766,
+                            longitude=float(ponto['longitude']) if ponto.get('longitude') is not None else -39.5808,
                         )
                         if payload is None:
                             return
 
-                        if ponto.get('latitude') is not None:
-                            payload['latitude'] = ponto['latitude']
-                        if ponto.get('longitude') is not None:
-                            payload['longitude'] = ponto['longitude']
-                        if ponto.get('telefoneContato'):
-                            payload['telefoneContato'] = ponto['telefoneContato']
-                        if ponto.get('idInstituicao') is not None:
-                            payload['instituicaoId'] = ponto['idInstituicao']
-
                         try:
                             atualizar_ponto_coleta(int(ponto_id), payload)
-                            novo_status = str(ed_status.value or status_atual).upper()
-                            motivo_novo = (ed_motivo.value or '').strip()
                             motivo_antigo = str(ponto.get('motivoStatus') or '').strip()
                             if novo_status != status_atual or motivo_novo != motivo_antigo:
                                 alterar_status_ponto_coleta(
@@ -1195,157 +1319,205 @@ def pontos_de_coleta() -> None:
 
             dialog_editar.open()
 
-        with grid('2'):
-            with card('Rotas disponíveis'):
-                rotas_disponiveis = {
-                    'centro': {
-                        'nome': m.ROTA_PLANEJAMENTO.nome_rota,
-                        'detalhe': (
-                            f'{len(m.ROTA_PLANEJAMENTO.tabela_paradas.rows)} paradas • '
-                            f'{m.ROTA_PLANEJAMENTO.distancia} • {m.ROTA_PLANEJAMENTO.duracao}'
-                        ),
-                        'carga': m.ROTA_PLANEJAMENTO.carga,
-                    },
-                    'norte': {
-                        'nome': 'Rota Zona Norte • Coleta Seletiva',
-                        'detalhe': '4 paradas • 18,2 km • 1h10',
-                        'carga': '420 kg',
-                    },
-                    'sul': {
-                        'nome': 'Rota Zona Sul • Ecopontos',
-                        'detalhe': '3 paradas • 14,5 km • 50min',
-                        'carga': '310 kg',
-                    },
-                }
-
-                opcoes_rotas = {k: v['nome'] for k, v in rotas_disponiveis.items()}
-
-                with ui.element('div').classes('form-grid'):
+        container_principal = grid('65') if pode_gerenciar else ui.element('div').classes('w-full')
+        with container_principal:
+            with card('Pontos cadastrados'):
+                with ui.element('div').classes('form-grid cols-4').style('margin-bottom:14px'):
                     with ui.element('div'):
-                        h('<label class="form-label">Escolha a rota</label>')
-                        rota_sel = ui.select(
-                            opcoes_rotas,
-                            value='centro',
-                        ).props(
-                            'outlined dense hide-bottom-space options-dense aria-label="Rotas disponíveis"'
-                        ).classes('eco-field')
+                        h('<label class="form-label">Status</label>')
+                        filtro_status = ui.select(
+                            {'': 'Todos', **_STATUS_PONTO_OPCOES},
+                            value='',
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
 
-                    resumo_rota_box = ui.element('div').classes('w-full')
+                    filtro_bairro = form_field('Bairro', placeholder='Filtrar por bairro')
 
-                    def _atualizar_preview_rota() -> None:
-                        resumo_rota_box.clear()
-                        escolhida = rotas_disponiveis.get(str(rota_sel.value or 'centro'))
-                        if not escolhida:
-                            return
-                        with resumo_rota_box:
-                            h(
-                                f'<div style="padding:14px;border-radius:10px;background:#F5F7F8;'
-                                f'border:1px solid #E5E7EB">'
-                                f'  <div style="font-size:13px;font-weight:600;color:{PRIMARY}">'
-                                f'    {escape(escolhida["nome"])}'
-                                f'  </div>'
-                                f'  <div class="muted" style="font-size:11px;margin-top:4px">'
-                                f'    {escape(escolhida["detalhe"])} • Carga prevista: {escape(escolhida["carga"])}'
-                                f'  </div>'
-                                f'</div>'
+                    with ui.element('div'):
+                        h('<label class="form-label">Material</label>')
+                        filtro_material = ui.select(
+                            {'': 'Todos', **_OPCOES_TIPO_MATERIAL_COLETA},
+                            value='',
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                    with ui.element('div').classes('cell-end'):
+                        with ui.row().classes('gap-2 no-wrap'):
+                            eco_button(
+                                'Filtrar',
+                                lambda: carregar_tabela(notificar_erro=True),
+                                cls='dark',
                             )
 
-                    rota_sel.on_value_change(lambda _e: _atualizar_preview_rota())
-                    _atualizar_preview_rota()
+                            def _limpar_filtros() -> None:
+                                filtro_status.value = ''
+                                filtro_bairro.value = ''
+                                filtro_material.value = ''
+                                carregar_tabela(notificar_erro=False)
 
-                    def seguir_rota() -> None:
-                        escolhida = rotas_disponiveis.get(str(rota_sel.value or 'centro'))
-                        if escolhida:
-                            ui.notify(f'Rota selecionada: {escolhida["nome"]}', type='positive')
-                        ui.navigate.to('/rotas')
+                            eco_button('Limpar', _limpar_filtros, cls='outline')
 
-                    eco_button('Selecionar rota', seguir_rota, cls='dark eco-block')
+                tabela_container = ui.element('div')
 
-            with card('Cadastrar novo ponto'):
-                with ui.element('div').classes('form-grid'):
-                    nome = form_field('Nome do ponto',
-                                      placeholder='Ex: Ecoponto Jardim de Eunápolis')
-                    endereco = form_field('Endereço completo',
-                                          placeholder='Rua, Numero, Bairro, Cidade')
-                    with ui.element('div').classes('form-grid cols-2'):
-                        responsavel = form_field('Responsável:', placeholder='Nome')
-                        horarios = form_field('Horários', placeholder='Seg - Sex 8h à 17h')
-                    with ui.element('div'):
-                        h('<label class="form-label">Materiais aceitos</label>')
-                        materiais = chip_select(m.MATERIAIS_ACEITOS,
-                                                m.MATERIAIS_PRE_SELECIONADOS)
-
-                    def cadastrar() -> None:
-                        if not _obrigatorios(nome=nome, endereço=endereco,
-                                             responsável=responsavel):
-                            return
-                        if not materiais:
-                            ui.notify('Selecione ao menos um material aceito.', type='warning')
-                            return
-
-                        payload = _montar_payload_ponto(
-                            nome=nome.value,
-                            endereco_completo=endereco.value,
-                            responsavel=responsavel.value,
-                            horarios=horarios.value,
-                            materiais_selecionados=materiais,
-                        )
-                        if payload is None:
-                            return
-                        if not payload['materiaisAceitos']:
-                            ui.notify('Nenhum material válido selecionado para envio.', type='warning')
-                            return
-
+                def carregar_tabela(notificar_erro: bool = False) -> None:
+                    tabela_container.clear()
+                    with tabela_container:
                         try:
-                            criado = criar_ponto_coleta(payload)
-                            nome_criado = criado.get('nome') or nome.value
-                            ui.notify(f'Ponto "{nome_criado}" cadastrado com sucesso!',
-                                      type='positive')
-                            nome.value = ''
-                            endereco.value = ''
-                            responsavel.value = ''
-                            horarios.value = ''
-                            if carregar_tabela_ref[0]:
-                                carregar_tabela_ref[0](notificar_erro=True)
-                        except ApiError as exc:
-                            ui.notify(exc.message, type='negative')
-
-                    eco_button('Cadastrar ponto', cadastrar, cls='dark eco-block')
-
-        with card('Pontos cadastrados'):
-            tabela_container = ui.element('div')
-
-            def carregar_tabela(notificar_erro: bool = False) -> None:
-                tabela_container.clear()
-                with tabela_container:
-                    try:
-                        pontos = listar_pontos_coleta()
-                        if pontos:
-                            data_table(
-                                _converter_pontos_para_tabela(pontos),
-                                action='Editar',
-                                on_action=lambda idx, _row, pts=pontos: abrir_modal_edicao(pts[idx]),
+                            pontos = listar_pontos_coleta(
+                                status=str(filtro_status.value or '') or None,
+                                bairro=(filtro_bairro.value or '').strip() or None,
+                                material=str(filtro_material.value or '') or None,
                             )
-                        else:
-                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                              'Nenhum ponto de coleta cadastrado até o momento.</div>')
-                    except ApiError as exc:
-                        if notificar_erro:
-                            ui.notify(exc.message, type='warning')
-                        data_table(m.PONTOS_CADASTRADOS, action='Editar')
+                            if pontos:
+                                if pode_gerenciar:
+                                    data_table(
+                                        _converter_pontos_para_tabela(pontos),
+                                        action='Editar',
+                                        on_action=lambda idx, _row, pts=pontos: abrir_modal_edicao(pts[idx]),
+                                    )
+                                else:
+                                    data_table(_converter_pontos_para_tabela(pontos))
+                            else:
+                                h('<div class="muted" style="font-size:13px;padding:10px 0">'
+                                  'Nenhum ponto de coleta encontrado para os filtros informados.</div>')
+                        except ApiError as exc:
+                            if notificar_erro:
+                                ui.notify(exc.message, type='warning')
+                            h(f'<div class="muted" style="font-size:13px;padding:10px 0">'
+                              f'{escape(exc.message)}</div>')
 
-            carregar_tabela_ref[0] = carregar_tabela
-            carregar_tabela(notificar_erro=False)
+                carregar_tabela_ref[0] = carregar_tabela
+                carregar_tabela(notificar_erro=False)
+
+            if pode_gerenciar:
+                with card('Cadastrar novo ponto'):
+                    with ui.element('div').classes('form-grid'):
+                        nome = form_field('Nome do ponto', placeholder='Ex: Ecoponto Centro')
+                        with ui.element('div').classes('form-grid cols-2'):
+                            responsavel = form_field('Responsável', placeholder='Nome do responsável')
+                            telefone = form_field(
+                                'Celular / Telefone',
+                                placeholder='73999999999',
+                                props='mask="###########" inputmode="numeric"',
+                            )
+
+                        horarios = form_field('Horário de funcionamento', placeholder='Seg - Sex 08h às 17h')
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            logradouro = form_field('Logradouro', placeholder='Av. Porto Seguro')
+                            numero = form_field('Número', placeholder='120')
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            bairro = form_field('Bairro', placeholder='Centro')
+                            cidade = form_field('Cidade', placeholder='Eunápolis')
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            uf = form_field('UF', value='BA', placeholder='BA', props='mask="AA"')
+                            cep = form_field(
+                                'CEP',
+                                placeholder='45820000',
+                                props='mask="########" inputmode="numeric"',
+                            )
+
+                        if mapa_inst_usuario:
+                            with ui.element('div'):
+                                h('<label class="form-label">Instituição vinculada (opcional)</label>')
+                                inst_select = ui.select(
+                                    mapa_inst_usuario,
+                                    value=None,
+                                ).props('outlined dense hide-bottom-space options-dense clearable').classes('eco-field')
+                        else:
+                            inst_select = None
+
+                        with ui.element('div'):
+                            h('<label class="form-label">Materiais aceitos</label>')
+                            materiais = chip_select(m.MATERIAIS_ACEITOS, m.MATERIAIS_PRE_SELECIONADOS)
+
+                        def cadastrar() -> None:
+                            if not _obrigatorios(
+                                nome=nome,
+                                responsável=responsavel,
+                                horário=horarios,
+                                logradouro=logradouro,
+                                número=numero,
+                                bairro=bairro,
+                                cidade=cidade,
+                                UF=uf,
+                                CEP=cep,
+                            ):
+                                return
+
+                            payload = _montar_payload_ponto_campos(
+                                nome=nome.value,
+                                responsavel=responsavel.value,
+                                telefone=telefone.value,
+                                horarios=horarios.value,
+                                logradouro=logradouro.value,
+                                numero=numero.value,
+                                bairro=bairro.value,
+                                cidade=cidade.value,
+                                estado=uf.value,
+                                cep=cep.value,
+                                materiais_selecionados=materiais,
+                                instituicao_id=int(inst_select.value) if inst_select is not None and inst_select.value is not None else None,
+                            )
+                            if payload is None:
+                                return
+
+                            try:
+                                criado = criar_ponto_coleta(payload)
+                                nome_criado = criado.get('nome') or nome.value
+                                ui.notify(f'Ponto "{nome_criado}" cadastrado com sucesso!', type='positive')
+                                nome.value = ''
+                                responsavel.value = ''
+                                telefone.value = ''
+                                horarios.value = ''
+                                logradouro.value = ''
+                                numero.value = ''
+                                bairro.value = ''
+                                cidade.value = ''
+                                cep.value = ''
+                                if inst_select is not None:
+                                    inst_select.value = None
+                                if carregar_tabela_ref[0]:
+                                    carregar_tabela_ref[0](notificar_erro=True)
+                            except ApiError as exc:
+                                ui.notify(exc.message, type='negative')
+
+                        eco_button('Cadastrar ponto', cadastrar, cls='dark eco-block')
 
 
 @ui.page('/agendamentos')
 def agendamentos() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    atualizar_sessao_atual()
+    perfil_atual = (obter_perfil_atual() or '').upper()
+    eh_coop = perfil_atual == 'COOPERATIVA'
+
+    vinculos_morador: list[dict[str, Any]] = []
+    try:
+        vinculos_morador = [
+            v for v in listar_meus_vinculos_instituicao()
+            if v.get('ativo', True)
+            and str(v.get('papel') or '').upper() == 'MORADOR'
+            and v.get('instituicaoId') is not None
+        ]
+    except ApiError:
+        vinculos_morador = []
+
+    eh_morador = len(vinculos_morador) > 0
+    pode_agendar = perfil_atual in ('INSTITUICAO', 'EMPRESA', 'ADMINISTRADOR') or eh_morador
+
     with layout('/agendamentos'):
-        page_header('Agendamento de retirada',
-                    'Solicite a coleta seletiva e acompanhe o status da solicitação')
+        page_header(
+            'Agendamento de retirada',
+            'Solicite a coleta seletiva e acompanhe o status da solicitação'
+            if pode_agendar
+            else 'Acompanhe o histórico e a linha do tempo das solicitações de coleta',
+        )
 
         selecionada_id: dict[str, int | None] = {'id': None}
-        dialog_status = ui.dialog()
         carregar_coletas_ref: list[Any] = [None]
         render_timeline_ref: list[Any] = [None]
 
@@ -1360,12 +1532,17 @@ def agendamentos() -> None:
                     tipo_inst = str(inst.get('tipo') or '').strip().upper()
                     if tipo_inst == 'COOPERATIVA':
                         mapa_cooperativas[inst_id] = nome_inst
-                    else:
+                    elif str(inst.get('status') or '').upper() == 'ATIVO':
                         mapa_instituicoes[inst_id] = nome_inst
         except ApiError:
             pass
 
-        if not mapa_instituicoes:
+        for v in vinculos_morador:
+            iid = int(v['instituicaoId'])
+            if iid not in mapa_instituicoes:
+                mapa_instituicoes[iid] = str(v.get('nomeInstituicao') or f'Instituição #{iid}')
+
+        if not mapa_instituicoes and eh_administrador():
             try:
                 for inst in listar_instituicoes(status='ATIVO'):
                     if inst.get('id') is not None and str(inst.get('tipo') or '').upper() != 'COOPERATIVA':
@@ -1374,249 +1551,174 @@ def agendamentos() -> None:
             except ApiError:
                 pass
 
-        if not mapa_cooperativas:
-            try:
-                for coop in listar_cooperativas(status='ATIVO'):
-                    if coop.get('id') is not None:
-                        coop_id = int(coop['id'])
-                        mapa_cooperativas[coop_id] = str(coop.get('nome') or f'Cooperativa #{coop_id}')
-            except ApiError:
-                pass
+        try:
+            for coop in listar_cooperativas(status='ATIVO'):
+                if coop.get('id') is not None:
+                    coop_id = int(coop['id'])
+                    mapa_cooperativas[coop_id] = str(coop.get('nome') or f'Cooperativa #{coop_id}')
+        except ApiError:
+            pass
 
         def _buscar_coletas_disponiveis() -> list[dict[str, Any]]:
-            minhas: list[dict[str, Any]] = []
+            if eh_administrador():
+                try:
+                    return listar_coletas_operacional()
+                except ApiError:
+                    pass
+
+            if eh_coop:
+                try:
+                    minhas_coops = {
+                        int(i['id']) for i in listar_minhas_instituicoes()
+                        if i.get('id') is not None and str(i.get('tipo') or '').upper() == 'COOPERATIVA'
+                    }
+                    todas = listar_coletas_operacional()
+                    return [
+                        c for c in todas
+                        if c.get('idCooperativa') is not None and int(c['idCooperativa']) in minhas_coops
+                    ]
+                except ApiError:
+                    pass
+
             try:
-                minhas = listar_minhas_coletas()
+                return listar_minhas_coletas()
             except ApiError:
-                minhas = []
-
-            if minhas or not eh_administrador():
-                return minhas
-
-            try:
-                return listar_coletas_operacional()
-            except ApiError:
-                return minhas
-
-        def abrir_modal_status(coleta: dict[str, Any]) -> None:
-            dialog_status.clear()
-            cid = coleta.get('id')
-            if not cid:
-                ui.notify('Coleta sem ID válido.', type='warning')
-                return
-
-            st_atual = str(coleta.get('status') or 'ENVIADA').upper()
-            if st_atual not in _STATUS_COLETA_OPCOES:
-                st_atual = 'ENVIADA'
-
-            coop_atual_raw = coleta.get('idCooperativa') if coleta.get('idCooperativa') is not None else coleta.get('cooperativaId')
-            coop_inicial = int(coop_atual_raw) if coop_atual_raw is not None and int(coop_atual_raw) in mapa_cooperativas else None
-
-            info_partes: list[str] = [f'Status atual: {_STATUS_COLETA_OPCOES.get(st_atual, st_atual)}']
-            if coleta.get('nomeInstituicao'):
-                info_partes.append(f"Instituição: {coleta['nomeInstituicao']}")
-            if coleta.get('nomeCooperativa'):
-                info_partes.append(f"Cooperativa: {coleta['nomeCooperativa']}")
-            if coleta.get('nomeSolicitante'):
-                info_partes.append(f"Solicitante: {coleta['nomeSolicitante']}")
-
-            with dialog_status, ui.card().style('width:460px;max-width:95vw;border-radius:16px;padding:20px'):
-                h(
-                    f'<div class="card-title" style="margin-bottom:6px">Status da coleta #{cid}</div>'
-                    f'<div class="muted" style="font-size:11px;margin-bottom:12px">'
-                    f'{escape(" • ".join(info_partes))}</div>'
-                )
-                with ui.element('div').classes('form-grid'):
-                    with ui.element('div'):
-                        h('<label class="form-label">Novo status</label>')
-                        sel_st = ui.select(
-                            _STATUS_COLETA_OPCOES,
-                            value=st_atual,
-                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
-
-                    if mapa_cooperativas:
-                        with ui.element('div'):
-                            h('<label class="form-label">Cooperativa (opcional)</label>')
-                            sel_coop_modal = ui.select(
-                                mapa_cooperativas,
-                                value=coop_inicial,
-                            ).props('outlined dense hide-bottom-space options-dense clearable').classes('eco-field')
-                    else:
-                        sel_coop_modal = None
-
-                    obs_st = form_field('Observação (opcional)', placeholder='Ex: Coletado em 11 de abr')
-
-                    def salvar_status() -> None:
-                        escolhido = str(sel_st.value or st_atual).upper()
-                        try:
-                            if escolhido == 'CANCELADA':
-                                cancelar_coleta(int(cid))
-                                ui.notify(f'Coleta #{cid} cancelada com sucesso!', type='positive')
-                            else:
-                                coop_val = (
-                                    int(sel_coop_modal.value)
-                                    if sel_coop_modal is not None and sel_coop_modal.value is not None
-                                    else None
-                                )
-                                atualizar_status_coleta(
-                                    int(cid),
-                                    escolhido,
-                                    obs_st.value,
-                                    cooperativa_id=coop_val,
-                                )
-                                ui.notify(f'Status da coleta #{cid} atualizado!', type='positive')
-                            dialog_status.close()
-                            if carregar_coletas_ref[0]:
-                                carregar_coletas_ref[0](notificar_erro=True, focar_id=int(cid))
-                        except ApiError as exc:
-                            ui.notify(exc.message, type='negative')
-
-                    def acao_cancelar_coleta() -> None:
-                        try:
-                            cancelar_coleta(int(cid))
-                            ui.notify(f'Coleta #{cid} cancelada!', type='positive')
-                            dialog_status.close()
-                            if carregar_coletas_ref[0]:
-                                carregar_coletas_ref[0](notificar_erro=True, focar_id=int(cid))
-                        except ApiError as exc:
-                            ui.notify(exc.message, type='negative')
-
-                    with ui.row().classes('justify-between items-center w-full').style('margin-top:10px'):
-                        if st_atual not in ('REALIZADA', 'CANCELADA'):
-                            eco_button(
-                                'Cancelar coleta',
-                                acao_cancelar_coleta,
-                                cls='outline',
-                            )
-                        else:
-                            ui.element('div')
-                        with ui.row().classes('gap-2'):
-                            eco_button('Fechar', dialog_status.close, cls='outline')
-                            eco_button(
-                                'Atualizar',
-                                salvar_status,
-                                cls='dark',
-                                props='unelevated no-caps text-white',
-                            ).style('background-color: #17693A !important; color: #FFFFFF !important;')
-
-            dialog_status.open()
+                return []
 
         with grid('2'):
-            with card('Nova solicitação'):
-                with ui.element('div').classes('form-grid'):
-                    with ui.element('div'):
-                        h('<label class="form-label">Instituição solicitante</label>')
-                        instituicao_select = ui.select(
-                            mapa_instituicoes,
-                            value=None,
-                        ).props(
-                            'outlined dense hide-bottom-space options-dense clearable '
-                            'aria-label="Instituição solicitante"'
-                        ).classes('eco-field')
-
-                    material = form_field(
-                        'Tipo do material',
-                        options=list(_OPCOES_TIPO_MATERIAL_COLETA.values()),
-                        value=_OPCOES_TIPO_MATERIAL_COLETA['PAPEL'],
-                    )
-                    with ui.element('div').classes('form-grid cols-2'):
-                        data = form_field('Data preferencial', props='type=date')
-                        janela = form_field('Horários', options=m.JANELAS_HORARIO,
-                                            value=m.JANELAS_HORARIO[0])
-                    with ui.element('div').classes('form-grid cols-2'):
-                        quantidade = form_field('Quantidade estimada', value='50',
-                                                props='suffix=KG type=number min=0.1 step=0.1')
+            if pode_agendar:
+                with card('Nova solicitação'):
+                    with ui.element('div').classes('form-grid'):
                         with ui.element('div'):
-                            h('<label class="form-label">Cooperativa</label>')
-                            cooperativa_select = ui.select(
-                                mapa_cooperativas,
-                                value=None,
-                            ).props(
-                                'outlined dense hide-bottom-space options-dense clearable '
-                                'aria-label="Cooperativa"'
-                            ).classes('eco-field')
-                    endereco_coleta = form_field(
-                        'Endereço de coleta',
-                        placeholder='Rua, Numero, Bairro, Cidade',
-                    )
-                    observacoes = form_field('Observações', placeholder='Informações disponíveis...')
+                            h('<label class="form-label">Instituição solicitante</label>')
+                            inst_padrao = next(iter(mapa_instituicoes.keys()), None)
+                            props_inst = (
+                                'outlined dense hide-bottom-space options-dense aria-label="Instituição solicitante"'
+                                + (' clearable' if eh_administrador() else '')
+                            )
+                            instituicao_select = ui.select(
+                                mapa_instituicoes,
+                                value=inst_padrao,
+                            ).props(props_inst).classes('eco-field')
 
-                    def enviar() -> None:
-                        if not _obrigatorios(
-                            material=material,
-                            data=data,
-                            quantidade=quantidade,
-                            endereço=endereco_coleta,
-                        ):
-                            return
-
-                        data_hora_iso = _montar_data_hora_futura(
-                            str(data.value or ''),
-                            str(janela.value or ''),
+                        material = form_field(
+                            'Tipo do material',
+                            options=list(_OPCOES_TIPO_MATERIAL_COLETA.values()),
+                            value=_OPCOES_TIPO_MATERIAL_COLETA['PAPEL'],
                         )
-                        if not data_hora_iso:
-                            ui.notify(
-                                'Escolha uma data preferencial futura válida.',
-                                type='warning',
+                        with ui.element('div').classes('form-grid cols-2'):
+                            data = form_field('Data preferencial', props='type=date')
+                            janela = form_field('Horários', options=m.JANELAS_HORARIO,
+                                                value=m.JANELAS_HORARIO[0])
+                        with ui.element('div').classes('form-grid cols-2'):
+                            quantidade = form_field('Quantidade estimada', value='50',
+                                                    props='suffix=KG type=number min=0.1 step=0.1')
+                            with ui.element('div'):
+                                h('<label class="form-label">Cooperativa</label>')
+                                cooperativa_select = ui.select(
+                                    mapa_cooperativas,
+                                    value=None,
+                                ).props(
+                                    'outlined dense hide-bottom-space options-dense clearable '
+                                    'aria-label="Cooperativa"'
+                                ).classes('eco-field')
+                        endereco_coleta = form_field(
+                            'Endereço de coleta',
+                            placeholder='Rua, Numero, Bairro, Cidade',
+                        )
+                        observacoes = form_field('Observações', placeholder='Informações disponíveis...')
+
+                        def enviar() -> None:
+                            if not _obrigatorios(
+                                material=material,
+                                data=data,
+                                quantidade=quantidade,
+                                endereço=endereco_coleta,
+                            ):
+                                return
+
+                            if not eh_administrador() and instituicao_select.value is None:
+                                ui.notify('Selecione a instituição solicitante.', type='warning')
+                                return
+
+                            data_hora_iso = _montar_data_hora_futura(
+                                str(data.value or ''),
+                                str(janela.value or ''),
                             )
-                            return
-
-                        end_split = _extrair_endereco_4_partes(str(endereco_coleta.value or ''))
-                        if end_split is None:
-                            ui.notify(
-                                'Informe o endereço no formato: Rua, Numero, Bairro, Cidade.',
-                                type='warning',
-                            )
-                            return
-
-                        try:
-                            qtd_val = float(str(quantidade.value or '0').replace(',', '.'))
-                        except ValueError:
-                            ui.notify('Quantidade estimada inválida.', type='warning')
-                            return
-
-                        if qtd_val < 0.1:
-                            ui.notify('A quantidade estimada deve ser no mínimo 0.1 kg.', type='warning')
-                            return
-
-                        logradouro, numero, bairro, cidade = end_split
-                        payload: dict[str, Any] = {
-                            'dataHoraAgendamento': data_hora_iso,
-                            'janelaHorario': str(janela.value or '08:00 - 10:00')[:50],
-                            'tipoMaterial': _normalizar_tipo_material_coleta(str(material.value or '')),
-                            'quantidadeEstimadaKg': qtd_val,
-                            'observacoes': (str(observacoes.value or '')).strip()[:255] or None,
-                            'logradouro': logradouro,
-                            'numero': numero,
-                            'bairro': bairro,
-                            'cidade': cidade,
-                            'estado': 'BA',
-                            'cep': '45820000',
-                        }
-                        if mapa_instituicoes and instituicao_select.value is not None:
-                            payload['instituicaoId'] = int(instituicao_select.value)
-                        if mapa_cooperativas and cooperativa_select.value is not None:
-                            payload['cooperativaId'] = int(cooperativa_select.value)
-
-                        try:
-                            criada = agendar_coleta(payload)
-                            novo_id = criada.get('id')
-                            ui.notify(
-                                f'Solicitação #{novo_id or ""} enviada com sucesso!',
-                                type='positive',
-                            )
-                            data.value = ''
-                            endereco_coleta.value = ''
-                            observacoes.value = ''
-                            if carregar_coletas_ref[0]:
-                                carregar_coletas_ref[0](
-                                    notificar_erro=True,
-                                    focar_id=int(novo_id) if novo_id is not None else None,
+                            if not data_hora_iso:
+                                ui.notify(
+                                    'Escolha uma data preferencial futura válida.',
+                                    type='warning',
                                 )
-                        except ApiError as exc:
-                            ui.notify(exc.message, type='negative')
+                                return
 
-                    eco_button('Enviar Solicitação', enviar, cls='dark eco-block')
+                            end_split = _extrair_endereco_4_partes(str(endereco_coleta.value or ''))
+                            if end_split is None:
+                                ui.notify(
+                                    'Informe o endereço no formato: Rua, Numero, Bairro, Cidade.',
+                                    type='warning',
+                                )
+                                return
+
+                            try:
+                                qtd_val = float(str(quantidade.value or '0').replace(',', '.'))
+                            except ValueError:
+                                ui.notify('Quantidade estimada inválida.', type='warning')
+                                return
+
+                            if qtd_val < 0.1:
+                                ui.notify('A quantidade estimada deve ser no mínimo 0.1 kg.', type='warning')
+                                return
+
+                            logradouro, numero, bairro, cidade = end_split
+                            payload: dict[str, Any] = {
+                                'dataHoraAgendamento': data_hora_iso,
+                                'janelaHorario': str(janela.value or '08:00 - 10:00')[:50],
+                                'tipoMaterial': _normalizar_tipo_material_coleta(str(material.value or '')),
+                                'quantidadeEstimadaKg': qtd_val,
+                                'observacoes': (str(observacoes.value or '')).strip()[:255] or None,
+                                'logradouro': logradouro,
+                                'numero': numero,
+                                'bairro': bairro,
+                                'cidade': cidade,
+                                'estado': 'BA',
+                                'cep': '45820000',
+                            }
+                            if mapa_instituicoes and instituicao_select.value is not None:
+                                payload['instituicaoId'] = int(instituicao_select.value)
+                            if mapa_cooperativas and cooperativa_select.value is not None:
+                                payload['cooperativaId'] = int(cooperativa_select.value)
+
+                            try:
+                                criada = agendar_coleta(payload)
+                                novo_id = criada.get('id')
+                                ui.notify(
+                                    f'Solicitação #{novo_id or ""} enviada com sucesso!',
+                                    type='positive',
+                                )
+                                data.value = ''
+                                endereco_coleta.value = ''
+                                observacoes.value = ''
+                                if carregar_coletas_ref[0]:
+                                    carregar_coletas_ref[0](
+                                        notificar_erro=True,
+                                        focar_id=int(novo_id) if novo_id is not None else None,
+                                    )
+                            except ApiError as exc:
+                                ui.notify(exc.message, type='negative')
+
+                        eco_button('Enviar Solicitação', enviar, cls='dark eco-block')
+            else:
+                with card('Solicitação de coleta'):
+                    h(
+                        '<div class="muted" style="font-size:13px;padding:8px 0">'
+                        'O agendamento de novas retiradas está disponível para instituições aprovadas '
+                        '(<strong>Condomínio</strong> ou <strong>Empresa</strong>) e seus <strong>moradores vinculados</strong>.</div>'
+                    )
+                    if eh_coop:
+                        eco_button('Ir para Rotas e escala', lambda: ui.navigate.to('/rotas'), cls='dark')
+                    else:
+                        eco_button('Cadastrar minha instituição', lambda: ui.navigate.to('/minha-instituicao'), cls='outline')
 
             with card():
                 status_card_container = ui.element('div')
@@ -1627,12 +1729,13 @@ def agendamentos() -> None:
                         if not coleta_id:
                             h('<div class="card-head"><div><div class="card-title">'
                               'Status da solicitação</div></div></div>'
-                              '<div class="muted" style="font-size:12px;padding:8px 0">'
+                              '<div class="muted" style="font-size:13px;padding:8px 0">'
                               'Nenhuma solicitação selecionada.</div>')
                             return
                         h(f'<div class="card-head"><div><div class="card-title">'
                           f'Status da solicitação # {coleta_id}</div></div></div>')
 
+                        detalhe_coleta: dict[str, Any] = {}
                         resumo_partes: list[str] = []
                         try:
                             detalhe_coleta = buscar_coleta_por_id(coleta_id)
@@ -1645,10 +1748,10 @@ def agendamentos() -> None:
                                     f"Local: {detalhe_coleta['logradouro']}, {detalhe_coleta.get('numero') or ''} - {detalhe_coleta['bairro']}"
                                 )
                         except ApiError:
-                            pass
+                            detalhe_coleta = {}
 
                         if resumo_partes:
-                            h(f'<div class="muted" style="font-size:11px;margin-bottom:8px">'
+                            h(f'<div class="muted" style="font-size:12px;margin-bottom:8px">'
                               f'{escape(" • ".join(resumo_partes))}</div>')
 
                         try:
@@ -1657,13 +1760,29 @@ def agendamentos() -> None:
                             if etapas:
                                 timeline(etapas)
                             else:
-                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                                h('<div class="muted" style="font-size:13px;padding:8px 0">'
                                   'Sem eventos registrados para esta solicitação.</div>')
                         except ApiError as exc:
                             if exc.status_code != 404:
                                 ui.notify(exc.message, type='warning')
-                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                            h('<div class="muted" style="font-size:13px;padding:8px 0">'
                               'Sem eventos registrados para esta solicitação.</div>')
+
+                        status_detalhe = str(detalhe_coleta.get('status') or '').upper()
+                        if pode_agendar and status_detalhe and status_detalhe not in ('CONCLUIDA', 'REALIZADA', 'CANCELADA'):
+                            def _cancelar_atual(c_id: int = coleta_id) -> None:
+                                try:
+                                    cancelar_coleta(int(c_id))
+                                    ui.notify(f'Coleta #{c_id} cancelada!', type='positive')
+                                    if carregar_coletas_ref[0]:
+                                        carregar_coletas_ref[0](notificar_erro=True, focar_id=int(c_id))
+                                except ApiError as exc:
+                                    ui.notify(exc.message, type='negative')
+
+                            with ui.row().classes('justify-end').style('margin-top:12px'):
+                                eco_button('Cancelar coleta', _cancelar_atual, cls='outline').style(
+                                    'border-color:#B91C1C !important;color:#B91C1C !important;'
+                                )
 
                 render_timeline_ref[0] = render_timeline
                 render_timeline(None)
@@ -1679,7 +1798,7 @@ def agendamentos() -> None:
                             coletas_raw = _buscar_coletas_disponiveis()
                             coletas = _ordenar_coletas_canceladas_por_ultimo(coletas_raw)
                             if not coletas:
-                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                                h('<div class="muted" style="font-size:13px;padding:8px 0">'
                                   'Nenhuma coleta agendada até o momento.</div>')
                                 if render_timeline_ref[0]:
                                     render_timeline_ref[0](None)
@@ -1689,26 +1808,31 @@ def agendamentos() -> None:
                             if alvo_id is not None:
                                 selecionada_id['id'] = int(alvo_id)
 
-                            def acao_linha(idx: int, _row: tuple, cols: list[dict[str, Any]] = coletas) -> None:
-                                item = cols[idx]
-                                if item.get('id') is not None:
-                                    cid_int = int(item['id'])
-                                    selecionada_id['id'] = cid_int
-                                    if render_timeline_ref[0]:
-                                        render_timeline_ref[0](cid_int)
-                                abrir_modal_status(item)
+                            if len(coletas) > 1:
+                                def acao_linha(idx: int, _row: tuple, cols: list[dict[str, Any]] = coletas) -> None:
+                                    item = cols[idx]
+                                    if item.get('id') is not None:
+                                        cid_int = int(item['id'])
+                                        selecionada_id['id'] = cid_int
+                                        if render_timeline_ref[0]:
+                                            render_timeline_ref[0](cid_int)
+                                        ui.run_javascript('window.scrollTo({top: 0, behavior: "smooth"});')
+                                        ui.notify(f'Exibindo timeline da solicitação #{cid_int}.', type='info')
 
-                            data_table(
-                                _converter_coletas_para_tabela(coletas),
-                                action='Status',
-                                on_action=acao_linha,
-                            )
+                                data_table(
+                                    _converter_coletas_para_tabela(coletas),
+                                    action='Acompanhar',
+                                    on_action=acao_linha,
+                                )
+                            else:
+                                data_table(_converter_coletas_para_tabela(coletas))
+
                             if render_timeline_ref[0]:
                                 render_timeline_ref[0](selecionada_id['id'])
                         except ApiError as exc:
                             if notificar_erro:
                                 ui.notify(exc.message, type='warning')
-                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                            h('<div class="muted" style="font-size:13px;padding:8px 0">'
                               'Nenhuma coleta agendada até o momento.</div>')
                             if render_timeline_ref[0]:
                                 render_timeline_ref[0](None)
@@ -1716,13 +1840,68 @@ def agendamentos() -> None:
                 carregar_coletas_ref[0] = carregar_coletas
                 carregar_coletas(notificar_erro=False)
 
-
 @ui.page('/materiais')
 def materiais() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    atualizar_sessao_atual()
+    perfil_atual = (obter_perfil_atual() or '').upper()
+    eh_coop = perfil_atual == 'COOPERATIVA'
+
     with layout('/materiais'):
-        page_header('Controle de materiais recicláveis',
-                    'Registro, rastreamento e situação de todos os resíduos processados')
-        kpi_row(m.KPIS_MATERIAIS)
+        page_header(
+            'Controle de materiais recicláveis',
+            'Acompanhamento dos resíduos processados nas coletas e consulta ao catálogo ambiental',
+        )
+
+        def _carregar_coletas_materiais() -> list[dict[str, Any]]:
+            if eh_administrador():
+                try:
+                    return listar_coletas_operacional()
+                except ApiError:
+                    pass
+
+            if eh_coop:
+                try:
+                    minhas_coops = {
+                        int(i['id']) for i in listar_minhas_instituicoes()
+                        if i.get('id') is not None and str(i.get('tipo') or '').upper() == 'COOPERATIVA'
+                    }
+                    todas = listar_coletas_operacional()
+                    return [
+                        c for c in todas
+                        if c.get('idCooperativa') is not None and int(c['idCooperativa']) in minhas_coops
+                    ]
+                except ApiError:
+                    pass
+
+            try:
+                return listar_minhas_coletas()
+            except ApiError:
+                return []
+
+        coletas_reais = _carregar_coletas_materiais()
+
+        # KPIs: soma apenas coletas concluídas/realizadas (usando peso real quando informado)
+        totais = {'PAPEL': 0.0, 'PLASTICO': 0.0, 'METAL': 0.0, 'OLEO': 0.0}
+        for c in coletas_reais:
+            st = str(c.get('status') or '').upper()
+            if st not in ('CONCLUIDA', 'REALIZADA'):
+                continue
+            cod = str(c.get('tipoMaterial') or '').upper()
+            peso_val = float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+            if cod in totais:
+                totais[cod] += peso_val
+
+        kpis_reais = [
+            _atualizar_kpi(m.KPIS_MATERIAIS[0], 'PAPEL E PAPELÃO', f'{_formatar_numero_pt(totais["PAPEL"])} KG'),
+            _atualizar_kpi(m.KPIS_MATERIAIS[1], 'PLÁSTICO', f'{_formatar_numero_pt(totais["PLASTICO"])} KG'),
+            _atualizar_kpi(m.KPIS_MATERIAIS[2], 'METAL', f'{_formatar_numero_pt(totais["METAL"])} KG'),
+            _atualizar_kpi(m.KPIS_MATERIAIS[3], 'ÓLEO E DERIVADOS', f'{_formatar_numero_pt(totais["OLEO"])} L'),
+        ]
+        kpi_row(kpis_reais)
 
         catalogo = _carregar_materiais_catalogo_api()
         mapa_opcoes: dict[str, str] = {}
@@ -1760,7 +1939,7 @@ def materiais() -> None:
                         )
 
                 desc_html = (
-                    f'<div class="muted" style="font-size:11px;margin-top:4px">{escape(desc_mat)}</div>'
+                    f'<div class="muted" style="font-size:12px;margin-top:4px">{escape(desc_mat)}</div>'
                     if desc_mat
                     else ''
                 )
@@ -1770,54 +1949,144 @@ def materiais() -> None:
                     f'<div style="font-size:13px;font-weight:600;color:{PRIMARY}">'
                     f'{escape(nome_mat)}</div>'
                     f'{desc_html}'
-                    f'<div style="font-size:11px;margin-top:6px">'
+                    f'<div style="font-size:12px;margin-top:6px">'
                     f'{escape(" • ".join(partes_meta))}</div>'
                     f'</div>'
                 )
 
-        with card('Registrar entrada de material'):
-            with ui.element('div').classes('form-grid cols-4'):
+        with card('Consultar material e estimar impacto (CO₂)'):
+            with ui.element('div').style('display:grid;grid-template-columns:2fr 1fr auto;gap:12px;align-items:end'):
                 with ui.element('div'):
-                    h('<label class="form-label upper">Tipo</label>')
+                    h('<label class="form-label upper">Tipo de material</label>')
                     tipo_sel = ui.select(
                         mapa_opcoes,
                         value=codigo_inicial,
                     ).props(
-                        'outlined dense hide-bottom-space options-dense aria-label="Tipo"'
+                        'outlined dense hide-bottom-space options-dense aria-label="Tipo de material"'
                     ).classes('eco-field')
-                peso = form_field('Peso/Litros', value='0,00', upper=True)
-                form_field('Volume', value='0,00', upper=True)
-                data = form_field('Data', upper=True, props='type=date')
-                origem = form_field('Origem', value='COND. PARQUE VERDE', upper=True)
-                form_field('Destino', options=m.DESTINOS, value=m.DESTINOS[0], upper=True)
-                form_field('Situação', options=m.SITUACOES, value=m.SITUACOES[0], upper=True)
 
-                def registrar() -> None:
-                    if peso.value in ('', '0,00', None):
-                        ui.notify('Informe o peso ou o volume em litros.', type='warning')
-                        return
-                    if _obrigatorios(origem=origem, data=data):
-                        cod_escolhido = str(tipo_sel.value or codigo_inicial).strip().upper()
-                        try:
-                            qtd_num = float(str(peso.value or '0').replace(',', '.'))
-                        except ValueError:
-                            qtd_num = 0.0
+                peso_sim = form_field('Quantidade (kg / L)', value='50', upper=True, props='type=number min=0.1 step=0.1')
 
-                        try:
-                            detalhe = buscar_material_por_codigo(cod_escolhido)
-                            _render_detalhe_material(detalhe, qtd_informada=qtd_num)
-                            nome_mat = str(detalhe.get('nome') or cod_escolhido)
-                            ui.notify(f'Material {nome_mat} consultado na API!', type='positive')
-                        except ApiError as exc:
-                            ui.notify(exc.message, type='warning')
+                def consultar_material() -> None:
+                    cod_escolhido = str(tipo_sel.value or codigo_inicial).strip().upper()
+                    try:
+                        qtd_num = float(str(peso_sim.value or '0').replace(',', '.'))
+                    except ValueError:
+                        qtd_num = 0.0
+
+                    try:
+                        detalhe = buscar_material_por_codigo(cod_escolhido)
+                        _render_detalhe_material(detalhe, qtd_informada=max(0.0, qtd_num))
+                    except ApiError as exc:
+                        ui.notify(exc.message, type='warning')
 
                 with ui.element('div').classes('cell-end'):
-                    eco_button('REGISTRAR', registrar, cls='eco-block')
+                    eco_button('CONSULTAR IMPACTO', consultar_material, cls='eco-block')
 
             detalhe_box_ref[0] = ui.element('div').classes('w-full')
 
-        with card('Últimos registros', more='Ver mais'):
-            data_table(m.ULTIMOS_REGISTROS)
+        with card('Registros de materiais nas coletas'):
+            with ui.element('div').style('display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin-bottom:14px'):
+                with ui.element('div'):
+                    h('<label class="form-label">Filtrar por material</label>')
+                    filtro_mat = ui.select(
+                        {'': 'Todos', **_OPCOES_TIPO_MATERIAL_COLETA},
+                        value='',
+                    ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                with ui.element('div'):
+                    h('<label class="form-label">Filtrar por status</label>')
+                    filtro_st = ui.select(
+                        {'': 'Todos', **_STATUS_COLETA_OPCOES},
+                        value='',
+                    ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                with ui.element('div').classes('cell-end'):
+                    with ui.row().classes('gap-2 no-wrap'):
+                        eco_button('Filtrar', lambda: render_tabela_materiais.refresh(), cls='dark')
+
+                        def _limpar() -> None:
+                            filtro_mat.value = ''
+                            filtro_st.value = ''
+                            render_tabela_materiais.refresh()
+
+                        eco_button('Limpar', _limpar, cls='outline')
+
+            @ui.refreshable
+            def render_tabela_materiais() -> None:
+                mat_f = str(filtro_mat.value or '').upper()
+                st_f = str(filtro_st.value or '').upper()
+
+                filtradas = [
+                    c for c in coletas_reais
+                    if (not mat_f or str(c.get('tipoMaterial') or '').upper() == mat_f)
+                    and (not st_f or str(c.get('status') or '').upper() == st_f)
+                ]
+
+                if not filtradas:
+                    h('<div class="muted" style="font-size:13px;padding:10px 0">'
+                      'Nenhum registro de material encontrado para os filtros informados.</div>')
+                    return
+
+                tone_map = {
+                    'CONCLUIDA': 'green',
+                    'REALIZADA': 'green',
+                    'EM_ROTA': 'blue',
+                    'EM_ANDAMENTO': 'blue',
+                    'AGENDADA': 'amber',
+                    'ENVIADA': 'amber',
+                    'CANCELADA': 'gray',
+                }
+
+                rows: list[tuple] = []
+                for c in filtradas:
+                    cod = str(c.get('tipoMaterial') or 'PAPEL').upper()
+                    mat_lbl = _ENUM_PARA_CHIP.get(cod, cod.capitalize())
+                    unid = 'L' if cod == 'OLEO' else 'kg'
+
+                    peso_real = c.get('pesoRealKg')
+                    peso_est = c.get('quantidadeEstimadaKg')
+                    if peso_real is not None:
+                        peso_fmt = f'{_formatar_numero_pt(float(peso_real))} {unid} (real)'
+                    elif peso_est is not None:
+                        peso_fmt = f'{_formatar_numero_pt(float(peso_est))} {unid} (est.)'
+                    else:
+                        peso_fmt = '-'
+
+                    data_ref = str(
+                        c.get('dataConclusao')
+                        or c.get('dataHoraAgendamento')
+                        or c.get('dataCriacao')
+                        or ''
+                    )
+                    data_fmt = _formatar_data_curta(data_ref)
+                    origem_lbl = str(
+                        c.get('nomeInstituicao')
+                        or c.get('nomeSolicitante')
+                        or c.get('bairro')
+                        or '-'
+                    )
+                    destino_lbl = str(c.get('nomeCooperativa') or 'Não definida')
+                    st_raw = str(c.get('status') or 'ENVIADA').upper()
+                    st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
+
+                    rows.append((
+                        f'#{c.get("id") or "-"} • {mat_lbl}',
+                        peso_fmt,
+                        data_fmt,
+                        origem_lbl,
+                        destino_lbl,
+                        m.Badge(st_lbl, tone_map.get(st_raw, 'gray')),
+                    ))
+
+                data_table(
+                    m.Table(
+                        columns=('Material', 'Peso / Qtd', 'Data', 'Origem', 'Destino', 'Status'),
+                        rows=rows,
+                    )
+                )
+
+            render_tabela_materiais()
 
 
 @ui.page('/ecoscore')
@@ -2137,7 +2406,6 @@ def administracao() -> None:
                     f'Editar {escape(categoria.lower())} #{eid or "-"}</div>'
                     f'<div class="muted" style="font-size:12px;margin-bottom:12px">'
                     f'Tipo: <strong>{escape(tipo_lbl)}</strong> • Doc: {escape(doc_atual)}<br>'
-                    f'Nota: a API não possui endpoint de edição de dados cadastrais, '
                     f'apenas alteração de status.</div>'
                 )
 
@@ -2498,77 +2766,175 @@ def administracao() -> None:
 
 @ui.page('/rotas')
 def planejamento_rotas() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    atualizar_sessao_atual()
+    perfil = (obter_perfil_atual() or '').upper()
+    eh_admin = perfil == 'ADMINISTRADOR'
+    eh_motorista = perfil == 'MOTORISTA'
+    eh_cooperativa = perfil == 'COOPERATIVA'
+
     with layout('/rotas'):
-        dados = m.ROTA_PLANEJAMENTO
-        page_header(dados.page_title, dados.page_subtitle)
-
-        paradas: list[dict[str, Any]] = []
-        for idx, row in enumerate(dados.tabela_paradas.rows, start=1):
-            paradas.append({
-                'ordem': row[0] if len(row) > 0 else idx,
-                'ponto': str(row[1]) if len(row) > 1 else f'Ponto #{idx}',
-                'material': str(row[2]) if len(row) > 2 else '-',
-                'volume': str(row[3]) if len(row) > 3 else '-',
-                'previsao': str(row[5]) if len(row) > 5 else '-',
-                'status': 'Pendente',
-            })
-
-        estado: dict[str, Any] = {
-            'iniciada': False,
-            'atual_idx': None,
-            'concluida': False,
-        }
+        page_header(
+            'Rotas e entregas',
+            'Acompanhe sua fila real de coletas, escale motoristas e registre assinaturas de entrega',
+        )
 
         dialog_assinatura = ui.dialog()
+        estado: dict[str, Any] = {'coleta_selecionada_id': None}
 
-        def _proximo_pendente_idx() -> int | None:
-            for i, p in enumerate(paradas):
-                if p['status'] != 'Concluída':
-                    return i
-            return None
-
-        def iniciar_rota() -> None:
-            prox = _proximo_pendente_idx()
-            if prox is None:
-                ui.notify('Todas as paradas já foram concluídas.', type='info')
-                return
-            estado['iniciada'] = True
-            estado['atual_idx'] = prox
-            paradas[prox]['status'] = 'Em rota'
-            ui.notify(f'Rota iniciada! Próxima parada: {paradas[prox]["ponto"]}.', type='positive')
-            conteudo_rotas.refresh()
-
-        def pausar_rota() -> None:
-            idx = estado['atual_idx']
-            if idx is not None and 0 <= idx < len(paradas) and paradas[idx]['status'] == 'Em rota':
-                paradas[idx]['status'] = 'Pendente'
-            estado['iniciada'] = False
-            estado['atual_idx'] = None
-            ui.notify('Rota pausada. A parada voltou para a sequência.', type='warning')
-            conteudo_rotas.refresh()
-
-        def abrir_modal_assinatura() -> None:
-            idx = estado['atual_idx']
-            if idx is None or not (0 <= idx < len(paradas)):
+        # --- Bloco exclusivo de COOPERATIVA / ADMIN: escalar motoristas ---
+        @ui.refreshable
+        def secao_escala_motoristas() -> None:
+            if not (eh_cooperativa or eh_admin):
                 return
 
-            parada = paradas[idx]
+            with card('Escalar motorista para coletas'):
+                try:
+                    if eh_admin:
+                        coops = listar_cooperativas(status='ATIVO')
+                    else:
+                        coops = [
+                            i for i in listar_minhas_instituicoes()
+                            if str(i.get('tipo') or '').upper() == 'COOPERATIVA'
+                            and str(i.get('status') or '').upper() == 'ATIVO'
+                        ]
+                except ApiError as exc:
+                    h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
+                    return
+
+                if not coops:
+                    h('<div class="muted" style="font-size:13px;padding:6px 0">'
+                      'Nenhuma cooperativa ativa disponível para escalar motoristas.</div>')
+                    return
+
+                motoristas_por_coop: dict[int, dict[int, str]] = {}
+                for coop in coops:
+                    cid = int(coop['id'])
+                    try:
+                        membros = listar_membros_instituicao(cid)
+                        motoristas_por_coop[cid] = {
+                            int(mem['usuarioId']): str(mem.get('nomeUsuario') or f"Motorista #{mem['usuarioId']}")
+                            for mem in membros
+                            if mem.get('ativo', True)
+                            and str(mem.get('papel') or '').upper() == 'MOTORISTA'
+                            and mem.get('usuarioId') is not None
+                        }
+                    except ApiError:
+                        motoristas_por_coop[cid] = {}
+
+                try:
+                    todas_coletas = listar_coletas_operacional()
+                except ApiError as exc:
+                    h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
+                    return
+
+                coop_ids = {int(c['id']) for c in coops}
+                coletas_escalaveis = [
+                    c for c in todas_coletas
+                    if str(c.get('status') or '').upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA')
+                    and c.get('idCooperativa') is not None
+                    and int(c['idCooperativa']) in coop_ids
+                ]
+
+                if not coletas_escalaveis:
+                    h('<div class="muted" style="font-size:13px;padding:6px 0">'
+                      'Nenhuma coleta vinculada à cooperativa aguardando escala de motorista no momento.</div>')
+                    return
+
+                with ui.element('div').classes('list-divided'):
+                    for col in coletas_escalaveis:
+                        col_id = int(col['id'])
+                        coop_id = int(col['idCooperativa'])
+                        st_raw = str(col.get('status') or '').upper()
+                        st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw)
+                        mat_raw = str(col.get('tipoMaterial') or '').upper()
+                        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+                        qtd_str = f'{col.get("quantidadeEstimadaKg") or 0} kg'
+                        origem_str = str(col.get('nomeInstituicao') or col.get('nomeSolicitante') or 'Coleta avulsa')
+                        local_str = f'{col.get("logradouro") or ""}, {col.get("numero") or ""} - {col.get("bairro") or ""}'
+                        opcoes_mot = motoristas_por_coop.get(coop_id, {})
+
+                        with ui.element('div').classes('item').style('flex-wrap:wrap;gap:12px'):
+                            with ui.element('div').style('flex:1;min-width:220px'):
+                                h(
+                                    f'<div class="item-title" style="font-size:14px">'
+                                    f'Coleta #{col_id} • {escape(origem_str)}</div>'
+                                    f'<div class="item-meta" style="font-size:12px">'
+                                    f'{escape(mat_lbl)} ({escape(qtd_str)}) • {escape(local_str)} • '
+                                    f'Cooperativa: {escape(str(col.get("nomeCooperativa") or ""))}</div>'
+                                )
+
+                            h(f'<span class="badge b-blue">{escape(st_lbl)}</span>')
+
+                            if not opcoes_mot:
+                                h('<span class="muted" style="font-size:12px">'
+                                  'Cadastre um motorista em Minha instituição</span>')
+                            else:
+                                sel_mot = ui.select(
+                                    opcoes_mot,
+                                    value=next(iter(opcoes_mot.keys())),
+                                ).props('outlined dense hide-bottom-space options-dense').classes('eco-field').style('width:200px')
+
+                                def _escalar(c_id: int, select_ref: ui.select, status_atual: str) -> None:
+                                    if select_ref.value is None:
+                                        ui.notify('Selecione um motorista.', type='warning')
+                                        return
+                                    try:
+                                        if status_atual == 'ENVIADA':
+                                            atualizar_status_coleta(c_id, 'AGENDADA', 'Agendada pela cooperativa')
+                                        atribuir_motorista_coleta(c_id, int(select_ref.value))
+                                        ui.notify(f'Motorista escalado para a coleta #{c_id}!', type='positive')
+                                        secao_escala_motoristas.refresh()
+                                        conteudo_rotas.refresh()
+                                    except ApiError as exc:
+                                        ui.notify(exc.message, type='negative')
+
+                                eco_button(
+                                    'Atribuir motorista',
+                                    lambda _e=None, cid_a=col_id, sm=sel_mot, sa=st_raw: _escalar(cid_a, sm, sa),
+                                    cls='dark',
+                                )
+
+        def abrir_modal_assinatura(parada: dict[str, Any]) -> None:
+            coleta_id = int(parada['coletaId'])
             dialog_assinatura.clear()
-            canvas_id = f'sig-canvas-{idx}-{int(datetime.now().timestamp())}'
+            canvas_id = f'sig-canvas-{coleta_id}-{int(datetime.now().timestamp())}'
 
-            with dialog_assinatura, ui.card().style('width:480px;max-width:95vw;border-radius:16px;padding:20px'):
+            qtd_est = parada.get('quantidadeEstimadaKg')
+            peso_inicial = str(qtd_est) if qtd_est is not None else ''
+            resp_inicial = str(parada.get('nomeResponsavelLocal') or '')
+
+            with dialog_assinatura, ui.card().style('width:500px;max-width:95vw;border-radius:16px;padding:20px'):
                 h(
-                    f'<div class="card-title" style="margin-bottom:4px">Assinatura de confirmação</div>'
+                    f'<div class="card-title" style="margin-bottom:4px">'
+                    f'Concluir entrega • Coleta #{coleta_id}</div>'
                     f'<div class="muted" style="font-size:12px;margin-bottom:14px">'
-                    f'<strong>{escape(parada["ponto"])}</strong> • '
-                    f'{escape(parada["material"])} ({escape(parada["volume"])})</div>'
+                    f'<strong>{escape(str(parada.get("localOrigemNome") or "-"))}</strong> • '
+                    f'{escape(str(parada.get("nomeMaterial") or "-"))} '
+                    f'({escape(str(qtd_est or 0))} kg estimados)</div>'
                 )
 
                 with ui.element('div').classes('form-grid'):
                     campo_resp = form_field(
                         'Nome do responsável no local',
+                        value=resp_inicial,
                         placeholder='Ex: Maria Silva',
                     )
+                    with ui.element('div').classes('form-grid cols-2'):
+                        campo_doc = form_field(
+                            'CPF do recebedor',
+                            placeholder='Somente números (11 dígitos)',
+                            props='mask="###########" inputmode="numeric"',
+                        )
+                        campo_peso = form_field(
+                            'Peso real coletado (kg)',
+                            value=peso_inicial,
+                            props='type=number min=0.1 step=0.1',
+                        )
+
                     campo_obs = form_field(
                         'Observação (opcional)',
                         placeholder='Ex: Volume conferido na retirada',
@@ -2576,21 +2942,24 @@ def planejamento_rotas() -> None:
 
                     with ui.element('div'):
                         h(
-                            f'<label class="form-label">Assinatura</label>'
+                            f'<label class="form-label">Assinatura digital do responsável</label>'
                             f'<div style="border:1px dashed #94A3B8;border-radius:10px;background:#F8FAFC;overflow:hidden">'
-                            f'  <canvas id="{canvas_id}" width="430" height="130" '
-                            f'    style="width:100%;height:130px;display:block;cursor:crosshair;touch-action:none"></canvas>'
+                            f'  <canvas id="{canvas_id}" width="450" height="135" '
+                            f'    style="width:100%;height:135px;display:block;cursor:crosshair;touch-action:none"></canvas>'
                             f'</div>'
                             f'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">'
-                            f'  <span class="muted" style="font-size:10px">Assine com o mouse ou dedo no quadro acima</span>'
+                            f'  <span class="muted" style="font-size:11px">Assine com o mouse ou dedo no quadro acima</span>'
                             f'  <button type="button" onclick="const c=document.getElementById(\'{canvas_id}\');'
-                            f'    if(c){{c.getContext(\'2d\').clearRect(0,0,c.width,c.height);}}" '
-                            f'    style="font-size:11px;color:{PRIMARY};background:none;border:none;cursor:pointer">Limpar</button>'
+                            f'    if(c){{c.getContext(\'2d\').clearRect(0,0,c.width,c.height);}}'
+                            f'    window._ecoSigInk=window._ecoSigInk||{{}};window._ecoSigInk[\'{canvas_id}\']=false;" '
+                            f'    style="font-size:12px;color:{PRIMARY};background:none;border:none;cursor:pointer">Limpar</button>'
                             f'</div>'
                         )
 
                     ui.run_javascript(f'''
                         (() => {{
+                            window._ecoSigInk = window._ecoSigInk || {{}};
+                            window._ecoSigInk["{canvas_id}"] = false;
                             const c = document.getElementById("{canvas_id}");
                             if (!c) return;
                             const ctx = c.getContext("2d");
@@ -2606,8 +2975,21 @@ def planejamento_rotas() -> None:
                                     y: (t.clientY - r.top) * (c.height / r.height),
                                 }};
                             }};
-                            const start = (e) => {{ drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }};
-                            const move = (e) => {{ if (!drawing) return; e.preventDefault(); const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }};
+                            const start = (e) => {{
+                                drawing = true;
+                                window._ecoSigInk["{canvas_id}"] = true;
+                                const p = pos(e);
+                                ctx.beginPath();
+                                ctx.moveTo(p.x, p.y);
+                            }};
+                            const move = (e) => {{
+                                if (!drawing) return;
+                                e.preventDefault();
+                                window._ecoSigInk["{canvas_id}"] = true;
+                                const p = pos(e);
+                                ctx.lineTo(p.x, p.y);
+                                ctx.stroke();
+                            }};
                             const stop = () => {{ drawing = false; }};
                             c.addEventListener("mousedown", start);
                             c.addEventListener("mousemove", move);
@@ -2618,48 +3000,72 @@ def planejamento_rotas() -> None:
                         }})();
                     ''')
 
-                    def confirmar_assinatura() -> None:
+                    async def confirmar_assinatura() -> None:
                         responsavel = (campo_resp.value or '').strip()
                         if not responsavel:
                             ui.notify('Informe o nome do responsável pela assinatura.', type='warning')
                             return
 
-                        parada['status'] = 'Concluída'
-                        _CONFIRMACOES_ROTAS_ADMIN.insert(0, {
-                            'id': len(_CONFIRMACOES_ROTAS_ADMIN) + 1,
-                            'rota': dados.nome_rota,
-                            'ponto': parada['ponto'],
-                            'material': parada['material'],
-                            'volume': parada['volume'],
-                            'responsavel': responsavel,
-                            'observacao': (campo_obs.value or '').strip(),
-                            'horario': datetime.now().strftime('%H:%M'),
-                            'status': 'PENDENTE',
-                        })
+                        doc_limpo = re.sub(r'\D', '', campo_doc.value or '')
+                        if len(doc_limpo) != 11:
+                            ui.notify('Informe o CPF do recebedor com 11 dígitos (somente números).', type='warning')
+                            return
 
-                        prox = _proximo_pendente_idx()
-                        if prox is not None:
-                            estado['atual_idx'] = prox
-                            paradas[prox]['status'] = 'Em rota'
+                        peso_val: float | None = None
+                        peso_txt = str(campo_peso.value or '').strip().replace(',', '.')
+                        if peso_txt:
+                            try:
+                                peso_val = float(peso_txt)
+                            except ValueError:
+                                ui.notify('Peso real inválido.', type='warning')
+                                return
+                            if peso_val <= 0:
+                                ui.notify('O peso real coletado deve ser maior que zero.', type='warning')
+                                return
+
+                        sig_result = await ui.run_javascript(f'''
+                            (() => {{
+                                const c = document.getElementById("{canvas_id}");
+                                const hasInk = Boolean(window._ecoSigInk && window._ecoSigInk["{canvas_id}"]);
+                                return {{
+                                    hasInk,
+                                    dataUrl: c ? c.toDataURL("image/png") : "",
+                                }};
+                            }})()
+                        ''')
+
+                        if not isinstance(sig_result, dict) or not sig_result.get('hasInk') or not sig_result.get('dataUrl'):
+                            ui.notify('Peça ao responsável para assinar no quadro antes de confirmar.', type='warning')
+                            return
+
+                        payload: dict[str, Any] = {
+                            'nomeRecebedor': responsavel,
+                            'documentoRecebedor': doc_limpo,
+                            'assinaturaDigital': str(sig_result['dataUrl']),
+                        }
+                        if peso_val is not None:
+                            payload['pesoRealKg'] = peso_val
+                        obs_txt = (campo_obs.value or '').strip()
+                        if obs_txt:
+                            payload['observacoes'] = obs_txt
+
+                        try:
+                            concluir_entrega_motorista(coleta_id, payload)
                             ui.notify(
-                                f'Assinatura registrada! Próxima parada liberada: {paradas[prox]["ponto"]}.',
+                                f'Coleta #{coleta_id} concluída com assinatura registrada!',
                                 type='positive',
                             )
-                        else:
-                            estado['iniciada'] = False
-                            estado['atual_idx'] = None
-                            ui.notify(
-                                'Última parada assinada! Clique em Concluir rota.',
-                                type='positive',
-                            )
-
-                        dialog_assinatura.close()
-                        conteudo_rotas.refresh()
+                            estado['coleta_selecionada_id'] = None
+                            dialog_assinatura.close()
+                            secao_escala_motoristas.refresh()
+                            conteudo_rotas.refresh()
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
 
                     with ui.row().classes('justify-end gap-2').style('margin-top:10px'):
                         eco_button('Cancelar', dialog_assinatura.close, cls='outline')
                         eco_button(
-                            'Assinar e liberar próxima',
+                            'Assinar e concluir coleta',
                             confirmar_assinatura,
                             cls='dark',
                             props='unelevated no-caps text-white',
@@ -2667,160 +3073,568 @@ def planejamento_rotas() -> None:
 
             dialog_assinatura.open()
 
-        def concluir_rota() -> None:
-            estado['iniciada'] = False
-            estado['atual_idx'] = None
-            estado['concluida'] = True
-            ui.notify('Rota concluída com sucesso!', type='positive')
-            conteudo_rotas.refresh()
-
         @ui.refreshable
         def conteudo_rotas() -> None:
+            if not (eh_motorista or eh_admin):
+                if not eh_cooperativa:
+                    with card('Acesso à rota de coletas'):
+                        h(
+                            '<div class="muted" style="font-size:13px;padding:8px 0">'
+                            'A execução de rotas está disponível para usuários com perfil '
+                            '<strong>Motorista</strong> (vinculado a uma cooperativa).'
+                            '</div>'
+                        )
+                        eco_button('Ir para Minha instituição', lambda: ui.navigate.to('/minha-instituicao'), cls='outline')
+                return
+
+            try:
+                paradas = listar_minha_rota_motorista()
+            except ApiError as exc:
+                with card('Minha rota'):
+                    h(f'<div class="muted" style="font-size:13px;padding:8px 0">{escape(exc.message)}</div>')
+                return
+
             total = len(paradas)
-            concluidas = sum(1 for p in paradas if p['status'] == 'Concluída')
-            pct = int(round((concluidas / total) * 100)) if total else 0
-            atual_idx = estado['atual_idx']
-            parada_atual = (
-                paradas[atual_idx]
-                if estado['iniciada'] and atual_idx is not None and 0 <= atual_idx < total
-                else None
-            )
+            carga_total = sum(float(p.get('quantidadeEstimadaKg') or 0) for p in paradas)
+            em_andamento = sum(1 for p in paradas if str(p.get('status') or '').upper() == 'EM_ANDAMENTO')
+            em_rota = sum(1 for p in paradas if str(p.get('status') or '').upper() == 'EM_ROTA')
+
+            parada_atual: dict[str, Any] | None = None
+            if paradas:
+                alvo_id = estado['coleta_selecionada_id']
+                if alvo_id is not None:
+                    parada_atual = next((p for p in paradas if int(p['coletaId']) == int(alvo_id)), None)
+                if parada_atual is None:
+                    parada_atual = next(
+                        (p for p in paradas if str(p.get('status') or '').upper() == 'EM_ANDAMENTO'),
+                        paradas[0],
+                    )
+                    estado['coleta_selecionada_id'] = int(parada_atual['coletaId'])
 
             with grid('65'):
-                with card():
-                    h(
-                        f'<div class="card-head"><div>'
-                        f'<div class="card-title" style="font-size:16px;font-weight:600">'
-                        f'{escape(dados.nome_rota)}</div>'
-                        f'<div class="card-subtitle" style="font-size:11px;margin-top:4px">'
-                        f'{total} paradas • {escape(dados.distancia)} • '
-                        f'duração estimada de {escape(dados.duracao)}</div>'
-                        f'</div></div>'
-                    )
-
-                    if parada_atual is not None:
-                        h(
-                            f'<div style="padding:16px;border-radius:12px;background:#F5F7F8;'
-                            f'border:1px solid #E5E7EB;margin-top:6px">'
-                            f'  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
-                            f'    <div>'
-                            f'      <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">'
-                            f'        Parada atual • Ordem #{escape(str(parada_atual["ordem"]))}'
-                            f'      </div>'
-                            f'      <div style="font-size:17px;font-weight:600;color:{PRIMARY};margin-top:2px">'
-                            f'        {escape(parada_atual["ponto"])}'
-                            f'      </div>'
-                            f'    </div>'
-                            f'    <span class="badge b-blue">Em rota</span>'
-                            f'  </div>'
-                            f'  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px">'
-                            f'    <div>'
-                            f'      <div class="muted" style="font-size:10px">Material</div>'
-                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["material"])}</div>'
-                            f'    </div>'
-                            f'    <div>'
-                            f'      <div class="muted" style="font-size:10px">Volume estimado</div>'
-                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["volume"])}</div>'
-                            f'    </div>'
-                            f'    <div>'
-                            f'      <div class="muted" style="font-size:10px">Previsão</div>'
-                            f'      <div style="font-size:13px;font-weight:500">{escape(parada_atual["previsao"])}</div>'
-                            f'    </div>'
-                            f'  </div>'
-                            f'</div>'
-                        )
-                        with ui.row().classes('justify-end gap-2').style('margin-top:12px'):
-                            eco_button('Finalizar e assinar', abrir_modal_assinatura, cls='dark')
-                    elif concluidas == total and total > 0:
-                        h(
-                            f'<div style="padding:20px;border-radius:12px;background:#ECFDF5;'
-                            f'border:1px solid #BBF7D0;margin-top:6px">'
-                            f'  <div style="font-size:15px;font-weight:600;color:{PRIMARY}">'
-                            f'    Rota concluída'
-                            f'  </div>'
-                            f'  <div class="muted" style="font-size:12px;margin-top:4px">'
-                            f'    Todas as {total} paradas desta rota foram finalizadas.'
-                            f'  </div>'
-                            f'</div>'
-                        )
-                    else:
+                with card('Parada em atendimento'):
+                    if parada_atual is None:
                         h(
                             '<div style="padding:20px;border-radius:12px;background:#F5F7F8;'
                             'border:1px dashed #CBD5E1;margin-top:6px">'
-                            '  <div style="font-size:14px;font-weight:600">Nenhuma parada em atendimento</div>'
-                            '  <div class="muted" style="font-size:12px;margin-top:4px">'
-                            '    Clique em <strong>Iniciar rota</strong> no resumo ao lado para liberar '
-                            '    a primeira parada da sequência.'
+                            '  <div style="font-size:15px;font-weight:600">Nenhuma coleta pendente na sua rota</div>'
+                            '  <div class="muted" style="font-size:13px;margin-top:4px">'
+                            '    Quando a cooperativa atribuir uma coleta ao seu perfil, ela aparecerá aqui automaticamente.'
                             '  </div>'
                             '</div>'
                         )
+                    else:
+                        cid_atual = int(parada_atual['coletaId'])
+                        st_atual = str(parada_atual.get('status') or 'EM_ROTA').upper()
+                        st_lbl = _STATUS_COLETA_OPCOES.get(st_atual, st_atual)
+                        data_fmt = _formatar_data_curta(str(parada_atual.get('dataHoraAgendamento') or ''))
+                        obs_html = (
+                            f'<div class="muted" style="font-size:12px;margin-top:8px">'
+                            f'<strong>Observações:</strong> {escape(str(parada_atual["observacoes"]))}</div>'
+                            if parada_atual.get('observacoes')
+                            else ''
+                        )
 
-                with card('Resumo da rota'):
+                        h(
+                            f'<div style="padding:16px;border-radius:12px;background:#F5F7F8;'
+                            f'border:1px solid #E5E7EB;margin-top:6px">'
+                            f'  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:10px">'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px">'
+                            f'        Coleta #{cid_atual} • {escape(data_fmt)} ({escape(str(parada_atual.get("janelaHorario") or "-"))})'
+                            f'      </div>'
+                            f'      <div style="font-size:18px;font-weight:600;color:{PRIMARY};margin-top:2px">'
+                            f'        {escape(str(parada_atual.get("localOrigemNome") or "-"))}'
+                            f'      </div>'
+                            f'      <div class="muted" style="font-size:12px;margin-top:4px">'
+                            f'        {escape(str(parada_atual.get("enderecoCompleto") or "-"))}'
+                            f'      </div>'
+                            f'    </div>'
+                            f'    <span class="badge b-blue">{escape(st_lbl)}</span>'
+                            f'  </div>'
+                            f'  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:11px">Material</div>'
+                            f'      <div style="font-size:14px;font-weight:500">{escape(str(parada_atual.get("nomeMaterial") or "-"))}</div>'
+                            f'    </div>'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:11px">Volume estimado</div>'
+                            f'      <div style="font-size:14px;font-weight:500">{escape(str(parada_atual.get("quantidadeEstimadaKg") or 0))} kg</div>'
+                            f'    </div>'
+                            f'    <div>'
+                            f'      <div class="muted" style="font-size:11px">Responsável no local</div>'
+                            f'      <div style="font-size:14px;font-weight:500">{escape(str(parada_atual.get("nomeResponsavelLocal") or "-"))}</div>'
+                            f'      <div class="muted" style="font-size:11px">Tel: {escape(str(parada_atual.get("telefoneResponsavelLocal") or "Não informado"))}</div>'
+                            f'    </div>'
+                            f'  </div>'
+                            f'  {obs_html}'
+                            f'</div>'
+                        )
+
+                        def iniciar_atendimento(c_id: int) -> None:
+                            try:
+                                atualizar_status_coleta(c_id, 'EM_ROTA', 'Motorista saiu para a retirada no local')
+                                ui.notify(f'Coleta #{c_id} marcada como Em rota.', type='positive')
+                                conteudo_rotas.refresh()
+                            except ApiError as exc:
+                                ui.notify(exc.message, type='negative')
+
+                        with ui.row().classes('justify-end gap-2').style('margin-top:12px'):
+                            if st_atual == 'AGENDADA':
+                                eco_button(
+                                    'Iniciar deslocamento',
+                                    lambda _e=None, c=cid_atual: iniciar_atendimento(c),
+                                    cls='outline',
+                                )
+                            eco_button(
+                                'Finalizar e assinar',
+                                lambda _e=None, p=parada_atual: abrir_modal_assinatura(p),
+                                cls='dark',
+                            )
+
+                with card('Resumo da minha rota'):
                     h(
                         f'<div>'
                         f'  <div class="summary-item">'
-                        f'    <div class="summary-label">Distância total</div>'
-                        f'    <div class="summary-val">{escape(dados.distancia)}</div>'
+                        f'    <div class="summary-label">Paradas pendentes</div>'
+                        f'    <div class="summary-val">{total}</div>'
                         f'  </div>'
                         f'  <div class="summary-item">'
-                        f'    <div class="summary-label">Tempo estimado</div>'
-                        f'    <div class="summary-val">{escape(dados.duracao)}</div>'
+                        f'    <div class="summary-label">Carga prevista total</div>'
+                        f'    <div class="summary-val">{_formatar_numero_pt(carga_total)} kg</div>'
                         f'  </div>'
                         f'  <div class="summary-item">'
-                        f'    <div class="summary-label">Carga prevista</div>'
-                        f'    <div class="summary-val">{escape(dados.carga)}</div>'
+                        f'    <div class="summary-label">Em rota</div>'
+                        f'    <div class="summary-val">{em_rota}</div>'
                         f'  </div>'
                         f'  <div class="summary-item">'
-                        f'    <div class="summary-label">Emissão evitada</div>'
-                        f'    <div class="summary-val green">{escape(dados.co2)}</div>'
-                        f'  </div>'
-                        f'</div>'
-                        f'<div style="margin: 14px 0 16px">'
-                        f'  <div style="font-size:11px;font-weight:500;margin-bottom:6px">Execução da rota</div>'
-                        f'  <div style="display:flex;align-items:center;gap:10px">'
-                        f'    <div class="track" style="height:7px">'
-                        f'      <div class="fill" style="width:{pct}%"></div>'
-                        f'    </div>'
-                        f'    <span style="font-size:9px;color:{PRIMARY};font-weight:500;white-space:nowrap">'
-                        f'      {concluidas} de {total} paradas'
-                        f'    </span>'
+                        f'    <div class="summary-label">Em andamento</div>'
+                        f'    <div class="summary-val green">{em_andamento}</div>'
                         f'  </div>'
                         f'</div>'
                     )
+                    with ui.element('div').style('margin-top:14px'):
+                        eco_button('Atualizar rota', conteudo_rotas.refresh, cls='outline eco-block')
 
-                    if estado['concluida']:
-                        eco_button('Rota concluída', lambda: None, cls='outline eco-block').props('disable')
-                    elif concluidas == total and total > 0:
-                        eco_button('Concluir rota', concluir_rota, cls='dark eco-block')
-                    elif estado['iniciada']:
-                        eco_button('Pausar rota', pausar_rota, cls='outline eco-block')
-                    else:
-                        eco_button('Iniciar rota', iniciar_rota, cls='eco-block')
+            with card('Sequência de paradas da minha rota'):
+                outras_paradas = [
+                    p for p in paradas
+                    if parada_atual is None or int(p['coletaId']) != int(parada_atual['coletaId'])
+                ]
+                if not outras_paradas:
+                    h('<div class="muted" style="font-size:13px;padding:8px 0">'
+                      'Nenhuma outra parada aguardando na fila.</div>')
+                else:
+                    rows_rota: list[tuple] = []
+                    for p in outras_paradas:
+                        st_p = str(p.get('status') or 'EM_ROTA').upper()
+                        st_p_lbl = _STATUS_COLETA_OPCOES.get(st_p, st_p)
+                        rows_rota.append((
+                            f"#{p['coletaId']}",
+                            str(p.get('localOrigemNome') or '-'),
+                            str(p.get('bairro') or '-'),
+                            str(p.get('nomeMaterial') or '-'),
+                            f"{p.get('quantidadeEstimadaKg') or 0} kg",
+                            m.Badge(st_p_lbl),
+                            str(p.get('janelaHorario') or '-'),
+                        ))
 
-            with card('Sequência de paradas'):
-                rows_visiveis: list[tuple] = []
-                for i, p in enumerate(paradas):
-                    if estado['iniciada'] and i == atual_idx:
-                        continue
-                    tone = 'green' if p['status'] == 'Concluída' else 'amber'
-                    rows_visiveis.append((
-                        p['ordem'],
-                        p['ponto'],
-                        p['material'],
-                        p['volume'],
-                        m.Badge(p['status'], tone),
-                        p['previsao'],
-                    ))
+                    def _selecionar_parada(idx: int, _row: tuple, lista: list[dict[str, Any]] = outras_paradas) -> None:
+                        estado['coleta_selecionada_id'] = int(lista[idx]['coletaId'])
+                        ui.run_javascript('window.scrollTo({top: 0, behavior: "smooth"});')
+                        conteudo_rotas.refresh()
 
-                if rows_visiveis:
                     data_table(
                         m.Table(
-                            columns=('Ordem', 'Ponto de coleta', 'Material', 'Volume', 'Status', 'Previsão'),
-                            rows=rows_visiveis,
-                        )
+                            columns=('Coleta', 'Origem', 'Bairro', 'Material', 'Volume', 'Status', 'Janela'),
+                            rows=rows_rota,
+                        ),
+                        action='Atender',
+                        on_action=_selecionar_parada,
                     )
-                else:
-                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                      'Nenhuma outra parada na sequência.</div>')
 
+        secao_escala_motoristas()
         conteudo_rotas()
+
+@ui.page('/minha-instituicao')
+def minha_instituicao() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    # Atualiza perfil/nome na sessão caso o admin tenha aprovado uma instituição
+    atualizar_sessao_atual()
+
+    with layout('/minha-instituicao'):
+        page_header(
+            'Minha instituição',
+            'Solicite o cadastro de cooperativa, empresa ou condomínio e gerencie membros vinculados',
+        )
+
+        dialog_membros = ui.dialog()
+
+        def _abrir_modal_membros(inst: dict[str, Any]) -> None:
+            dialog_membros.clear()
+            inst_id = int(inst['id'])
+            nome_inst = str(inst.get('nome') or f'Instituição #{inst_id}')
+            tipo_inst = str(inst.get('tipo') or '').upper()
+            eh_coop = tipo_inst == 'COOPERATIVA'
+
+            papeis_opcoes = (
+                {'MOTORISTA': 'Motorista', 'MORADOR': 'Morador'}
+                if eh_coop
+                else {'MORADOR': 'Morador'}
+            )
+            papel_padrao = 'MOTORISTA' if eh_coop else 'MORADOR'
+
+            with dialog_membros, ui.card().style('width:560px;max-width:95vw;border-radius:16px;padding:20px'):
+                h(
+                    f'<div class="card-title" style="margin-bottom:4px">Membros • {escape(nome_inst)}</div>'
+                    f'<div class="muted" style="font-size:13px;margin-bottom:14px">'
+                    f'Informe CPF e e-mail de um usuário já cadastrado e ativo na plataforma.</div>'
+                )
+
+                with ui.element('div').classes('form-grid'):
+                    with ui.element('div').classes('form-grid cols-2'):
+                        campo_cpf = form_field(
+                            'CPF do usuário',
+                            placeholder='Somente números (11 dígitos)',
+                            props='mask="###########" inputmode="numeric"',
+                        )
+                        campo_email = form_field('E-mail do usuário', placeholder='usuario@email.com')
+
+                    with ui.element('div'):
+                        h('<label class="form-label">Papel na instituição</label>')
+                        sel_papel = ui.select(
+                            papeis_opcoes,
+                            value=papel_padrao,
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                    lista_membros_box = ui.element('div').classes('w-full')
+
+                    def carregar_membros() -> None:
+                        lista_membros_box.clear()
+                        with lista_membros_box:
+                            try:
+                                membros = listar_membros_instituicao(inst_id)
+                                ativos = [m_item for m_item in membros if m_item.get('ativo', True)]
+                                if not ativos:
+                                    h('<div class="muted" style="font-size:13px;padding:8px 0">'
+                                      'Nenhum membro ativo vinculado até o momento.</div>')
+                                    return
+
+                                with ui.element('div').classes('list-divided'):
+                                    for mem in ativos:
+                                        mid = int(mem['id'])
+                                        nome_m = str(mem.get('nomeUsuario') or f'Usuário #{mem.get("usuarioId")}')
+                                        email_m = str(mem.get('emailUsuario') or '-')
+                                        cpf_m = str(mem.get('cpfUsuario') or '-')
+                                        papel_m = str(mem.get('papel') or 'MORADOR').upper()
+                                        tone_p = 'blue' if papel_m == 'MOTORISTA' else 'green'
+
+                                        def _desvincular(membro_id: int, nome_alvo: str) -> None:
+                                            try:
+                                                desvincular_membro_instituicao(inst_id, membro_id)
+                                                ui.notify(f'{nome_alvo} desvinculado(a).', type='warning')
+                                                carregar_membros()
+                                            except ApiError as exc:
+                                                ui.notify(exc.message, type='negative')
+
+                                        with ui.element('div').classes('item'):
+                                            with ui.element('div').style('flex:1;min-width:0'):
+                                                h(
+                                                    f'<div class="item-title" style="font-size:14px">{escape(nome_m)}</div>'
+                                                    f'<div class="item-meta" style="font-size:12px">'
+                                                    f'{escape(email_m)} • CPF: {escape(cpf_m)}</div>'
+                                                )
+                                            h(f'<span class="badge b-{tone_p}" style="margin-right:8px">'
+                                              f'{escape(papel_m.capitalize())}</span>')
+                                            ui.button(
+                                                'Remover',
+                                                on_click=lambda _e, m_id=mid, nm=nome_m: _desvincular(m_id, nm),
+                                            ).props('flat dense no-caps').classes('btn-ghost').style(
+                                                'border-color:#B91C1C !important;color:#B91C1C !important;'
+                                            )
+                            except ApiError as exc:
+                                h(f'<div class="muted" style="font-size:13px;padding:8px 0">'
+                                  f'{escape(exc.message)}</div>')
+
+                    def adicionar_membro() -> None:
+                        cpf_limpo = re.sub(r'\D', '', campo_cpf.value or '')
+                        email_val = (campo_email.value or '').strip().lower()
+                        if len(cpf_limpo) != 11:
+                            ui.notify('Informe um CPF válido com 11 dígitos (somente números).', type='warning')
+                            return
+                        if '@' not in email_val:
+                            ui.notify('Informe um e-mail válido.', type='warning')
+                            return
+                        try:
+                            vincular_membro_instituicao(
+                                inst_id,
+                                cpf_limpo,
+                                email_val,
+                                str(sel_papel.value or papel_padrao),
+                            )
+                            ui.notify('Membro vinculado com sucesso!', type='positive')
+                            campo_cpf.value = ''
+                            campo_email.value = ''
+                            carregar_membros()
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-end gap-2'):
+                        eco_button(
+                            'Vincular membro',
+                            adicionar_membro,
+                            cls='dark',
+                            props='unelevated no-caps text-white',
+                        ).style('background-color: #17693A !important; color: #FFFFFF !important;')
+
+                    h('<div style="border-top:1px solid #EFEFEF;margin:6px 0"></div>'
+                      '<div style="font-size:13px;font-weight:600">Membros ativos</div>')
+                    carregar_membros()
+
+                with ui.row().classes('justify-end').style('margin-top:12px'):
+                    eco_button('Fechar', dialog_membros.close, cls='outline')
+
+            dialog_membros.open()
+
+        @ui.refreshable
+        def conteudo_instituicao() -> None:
+            minhas: list[dict[str, Any]] = []
+            vinculos: list[dict[str, Any]] = []
+            erro_carregamento = ''
+
+            try:
+                minhas = listar_minhas_instituicoes()
+            except ApiError as exc:
+                erro_carregamento = exc.message
+
+            try:
+                vinculos = [v for v in listar_meus_vinculos_instituicao() if v.get('ativo', True)]
+            except ApiError:
+                vinculos = []
+
+            with grid('65'):
+                with ui.element('div').classes('stack'):
+                    with card('Minhas instituições cadastradas'):
+                        if erro_carregamento:
+                            h(f'<div class="muted" style="font-size:13px;padding:8px 0">'
+                              f'{escape(erro_carregamento)}</div>')
+                        elif not minhas:
+                            h('<div class="muted" style="font-size:14px;padding:8px 0">'
+                              'Você ainda não possui nenhuma instituição cadastrada. '
+                              'Use o formulário ao lado para solicitar o cadastro de uma '
+                              '<strong>Cooperativa</strong>, <strong>Empresa</strong> ou <strong>Condomínio</strong>.</div>')
+                        else:
+                            with ui.element('div').classes('stack'):
+                                for inst in minhas:
+                                    nome_i = str(inst.get('nome') or f"Instituição #{inst.get('id')}")
+                                    tipo_raw = str(inst.get('tipo') or '').upper()
+                                    tipo_lbl = _TIPOS_INSTITUICAO_OPCOES.get(tipo_raw, tipo_raw.capitalize())
+                                    doc_i = str(inst.get('documento') or '-')
+                                    tel_i = str(inst.get('telefone') or '-')
+                                    st_raw = str(inst.get('status') or 'AGUARDANDO_ANALISE').upper()
+                                    st_lbl = _STATUS_CADASTRO_OPCOES.get(st_raw, st_raw.capitalize())
+                                    tone = (
+                                        'green' if st_raw == 'ATIVO'
+                                        else ('red' if st_raw == 'REJEITADO' else 'amber')
+                                    )
+                                    end_i = (
+                                        f'{inst.get("logradouro") or ""}, {inst.get("numero") or ""} - '
+                                        f'{inst.get("bairro") or ""}, {inst.get("cidade") or ""}/{inst.get("estado") or ""} '
+                                        f'(CEP: {inst.get("cep") or ""})'
+                                    )
+
+                                    with ui.element('div').style(
+                                        'padding:16px;border-radius:12px;background:#F8FAFC;'
+                                        'border:1px solid #E5E7EB'
+                                    ):
+                                        h(
+                                            f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'
+                                            f'  <div>'
+                                            f'    <div style="font-size:16px;font-weight:600;color:{PRIMARY}">{escape(nome_i)}</div>'
+                                            f'    <div class="muted" style="font-size:13px;margin-top:2px">'
+                                            f'      {escape(tipo_lbl)} • CNPJ: {escape(doc_i)} • Tel: {escape(tel_i)}'
+                                            f'    </div>'
+                                            f'    <div class="muted" style="font-size:12px;margin-top:4px">{escape(end_i)}</div>'
+                                            f'  </div>'
+                                            f'  <span class="badge b-{tone}" style="font-size:12px">{escape(st_lbl)}</span>'
+                                            f'</div>'
+                                        )
+
+                                        if st_raw == 'AGUARDANDO_ANALISE':
+                                            h(
+                                                '<div style="margin-top:10px;padding:10px 12px;border-radius:8px;'
+                                                'background:#FEF3C7;color:#92400E;font-size:13px">'
+                                                'Solicitação em análise pelo administrador da plataforma. '
+                                                'Assim que for aprovada, seu perfil e as funções de gestão serão liberados automaticamente.'
+                                                '</div>'
+                                            )
+                                        elif st_raw == 'REJEITADO':
+                                            motivo = str(inst.get('motivoRejeicao') or 'Não informado.')
+                                            h(
+                                                f'<div style="margin-top:10px;padding:10px 12px;border-radius:8px;'
+                                                f'background:#FEE2E2;color:#991B1B;font-size:13px">'
+                                                f'<strong>Motivo da rejeição:</strong> {escape(motivo)}<br>'
+                                                f'<span style="font-size:12px">O CNPJ permanece vinculado a este registro. '
+                                                f'Para reabrir a solicitação, peça ao administrador para alterar o status novamente para "Aguardando análise".</span>'
+                                                f'</div>'
+                                            )
+                                        elif st_raw == 'ATIVO':
+                                            rotulo_btn_membros = (
+                                                'Gerenciar motoristas e moradores'
+                                                if tipo_raw == 'COOPERATIVA'
+                                                else 'Gerenciar moradores'
+                                            )
+                                            with ui.row().classes('gap-2').style('margin-top:12px'):
+                                                eco_button(
+                                                    rotulo_btn_membros,
+                                                    lambda _e=None, item=inst: _abrir_modal_membros(item),
+                                                    cls='dark',
+                                                )
+                                                eco_button(
+                                                    'Ir para agendamentos',
+                                                    lambda: ui.navigate.to('/agendamentos'),
+                                                    cls='outline',
+                                                )
+
+                    if vinculos:
+                        with card('Instituições em que sou membro'):
+                            with ui.element('div').classes('list-divided'):
+                                for v in vinculos:
+                                    nome_v = str(v.get('nomeInstituicao') or f"Instituição #{v.get('instituicaoId')}")
+                                    papel_v = str(v.get('papel') or 'MORADOR').upper()
+                                    tone_v = 'blue' if papel_v == 'MOTORISTA' else 'green'
+                                    with ui.element('div').classes('item'):
+                                        with ui.element('div').style('flex:1;min-width:0'):
+                                            h(
+                                                f'<div class="item-title" style="font-size:15px">{escape(nome_v)}</div>'
+                                                f'<div class="item-meta" style="font-size:12px">'
+                                                f'Vínculo ativo como {escape(papel_v.lower())}</div>'
+                                            )
+                                        h(f'<span class="badge b-{tone_v}">{escape(papel_v.capitalize())}</span>')
+                                        if papel_v == 'MOTORISTA':
+                                            eco_button(
+                                                'Ver minha rota',
+                                                lambda: ui.navigate.to('/rotas'),
+                                                cls='outline',
+                                            )
+
+                with card('Solicitar cadastro de instituição'):
+                    h(
+                        '<div class="muted" style="font-size:12px;margin:-6px 0 12px">'
+                        'Após o envio, a solicitação ficará em análise até aprovação do administrador.</div>'
+                    )
+                    with ui.element('div').classes('form-grid'):
+                        with ui.element('div'):
+                            h('<label class="form-label">Tipo da instituição</label>')
+                            campo_tipo = ui.select(
+                                _TIPOS_INSTITUICAO_OPCOES,
+                                value='COOPERATIVA',
+                            ).props(
+                                'outlined dense hide-bottom-space options-dense aria-label="Tipo da instituição"'
+                            ).classes('eco-field')
+
+                        campo_nome = form_field('Nome da instituição', placeholder='Ex: Coop. Recicla BA')
+                        with ui.element('div').classes('form-grid cols-2'):
+                            campo_cnpj = form_field(
+                                'CNPJ',
+                                placeholder='Somente números (14 dígitos)',
+                                props='mask="##############" inputmode="numeric"',
+                            )
+                            campo_tel = form_field(
+                                'Celular / Telefone',
+                                placeholder='73999999999',
+                                props='mask="###########" inputmode="numeric"',
+                            )
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            campo_logradouro = form_field('Logradouro', placeholder='Av. Porto Seguro')
+                            campo_numero = form_field('Número', placeholder='120')
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            campo_bairro = form_field('Bairro', placeholder='Centro')
+                            campo_cidade = form_field('Cidade', placeholder='Eunápolis')
+
+                        with ui.element('div').classes('form-grid cols-2'):
+                            campo_uf = form_field('UF', value='BA', placeholder='BA', props='mask="AA"')
+                            campo_cep = form_field(
+                                'CEP',
+                                placeholder='45820000',
+                                props='mask="########" inputmode="numeric"',
+                            )
+
+                        def solicitar_cadastro() -> None:
+                            if not _obrigatorios(
+                                nome=campo_nome,
+                                CNPJ=campo_cnpj,
+                                telefone=campo_tel,
+                                logradouro=campo_logradouro,
+                                número=campo_numero,
+                                bairro=campo_bairro,
+                                cidade=campo_cidade,
+                                UF=campo_uf,
+                                CEP=campo_cep,
+                            ):
+                                return
+
+                            nome_val = (campo_nome.value or '').strip()
+                            if len(nome_val) < 3 or len(nome_val) > 150:
+                                ui.notify('O nome deve conter entre 3 e 150 caracteres.', type='warning')
+                                return
+
+                            cnpj_digitos = re.sub(r'\D', '', campo_cnpj.value or '')
+                            if len(cnpj_digitos) != 14:
+                                ui.notify('Informe um CNPJ válido com 14 dígitos (somente números).', type='warning')
+                                return
+
+                            tel_digitos = re.sub(r'\D', '', campo_tel.value or '')
+                            if len(tel_digitos) not in (10, 11):
+                                ui.notify('Informe o celular/telefone com DDD (ex: 73999999999).', type='warning')
+                                return
+
+                            uf_val = (campo_uf.value or '').strip().upper()
+                            if len(uf_val) != 2 or not uf_val.isalpha():
+                                ui.notify('Informe a UF com 2 letras (ex: BA).', type='warning')
+                                return
+
+                            cep_limpo = re.sub(r'\D', '', campo_cep.value or '')
+                            if len(cep_limpo) != 8:
+                                ui.notify('Informe um CEP válido com 8 dígitos (somente números).', type='warning')
+                                return
+
+                            payload = {
+                                'nome': nome_val,
+                                'documento': cnpj_digitos,
+                                'tipo': str(campo_tipo.value or 'COOPERATIVA').upper(),
+                                'telefone': tel_digitos,
+                                'logradouro': (campo_logradouro.value or '').strip(),
+                                'numero': (campo_numero.value or '').strip(),
+                                'bairro': (campo_bairro.value or '').strip(),
+                                'cidade': (campo_cidade.value or '').strip(),
+                                'estado': uf_val,
+                                'cep': cep_limpo,
+                            }
+
+                            try:
+                                criada = cadastrar_instituicao(payload)
+                                ui.notify(
+                                    f'Solicitação de "{criada.get("nome") or nome_val}" enviada para análise!',
+                                    type='positive',
+                                )
+                                campo_nome.value = ''
+                                campo_cnpj.value = ''
+                                campo_tel.value = ''
+                                campo_logradouro.value = ''
+                                campo_numero.value = ''
+                                campo_bairro.value = ''
+                                campo_cidade.value = ''
+                                campo_cep.value = ''
+                                conteudo_instituicao.refresh()
+                            except ApiError as exc:
+                                ui.notify(exc.message, type='negative')
+
+                        eco_button('Solicitar cadastro', solicitar_cadastro, cls='dark eco-block')
+
+        conteudo_instituicao()

@@ -710,7 +710,6 @@ def listar_instituicoes(
                 params=params or None,
                 headers=_auth_headers_obrigatorio(),
             )
-            print('[DEBUG API]', resp.request.method, resp.request.url, '->', resp.status_code, resp.text)
     except httpx.RequestError as exc:
         raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
 
@@ -973,3 +972,175 @@ def listar_ranking_ecoscore() -> list[dict[str, Any]]:
 
     dados = resp.json()
     return dados if isinstance(dados, list) else []
+
+def atualizar_sessao_atual() -> dict[str, Any]:
+    """Reconsulta GET /api/v1/usuarios/me e atualiza perfil/nome/email na sessao."""
+    token = obter_token()
+    if not token:
+        return {}
+    try:
+        me = buscar_perfil_atual(token)
+    except ApiError:
+        return {}
+
+    perfil_me = _normalizar_perfil(me.get('perfil'))
+    if perfil_me:
+        SESSAO_ATUAL['perfil'] = perfil_me
+    if me.get('nome'):
+        SESSAO_ATUAL['nome'] = str(me['nome']).strip()
+    if me.get('email'):
+        SESSAO_ATUAL['email'] = str(me['email']).strip().lower()
+    return me
+
+
+def vincular_membro_instituicao(
+    instituicao_id: int,
+    cpf: str,
+    email: str,
+    papel: str,
+) -> dict[str, Any]:
+    """POST /api/v1/instituicoes/{instituicaoId}/membros."""
+    payload = {
+        'cpf': cpf.strip(),
+        'email': email.strip().lower(),
+        'papel': papel.strip().upper(),
+    }
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.post(
+                f'/api/v1/instituicoes/{instituicao_id}/membros',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code not in (200, 201):
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao vincular membro (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
+
+
+def listar_membros_instituicao(instituicao_id: int) -> list[dict[str, Any]]:
+    """GET /api/v1/instituicoes/{instituicaoId}/membros."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                f'/api/v1/instituicoes/{instituicao_id}/membros',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar membros (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def desvincular_membro_instituicao(instituicao_id: int, membro_id: int) -> None:
+    """DELETE /api/v1/instituicoes/{instituicaoId}/membros/{membroId}."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.delete(
+                f'/api/v1/instituicoes/{instituicao_id}/membros/{membro_id}',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code not in (200, 204):
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao desvincular membro (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+
+def listar_meus_vinculos_instituicao() -> list[dict[str, Any]]:
+    """GET /api/v1/instituicoes/meus-vinculos."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/instituicoes/meus-vinculos',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar vínculos (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def listar_minha_rota_motorista() -> list[dict[str, Any]]:
+    """GET /api/v1/coletas/minha-rota."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/coletas/minha-rota',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar minha rota (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def atribuir_motorista_coleta(coleta_id: int, motorista_id: int) -> dict[str, Any]:
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/coletas/{coleta_id}/atribuir-motorista',
+                params={'motoristaId': motorista_id},
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao atribuir motorista (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()
+
+
+def concluir_entrega_motorista(coleta_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """PATCH /api/v1/coletas/{id}/concluir-entrega."""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.patch(
+                f'/api/v1/coletas/{coleta_id}/concluir-entrega',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao concluir entrega (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+
+    return resp.json()

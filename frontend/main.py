@@ -20,51 +20,6 @@ app.add_static_file(
 )
 
 
-def _formatar_cpf_cnpj(valor: str | None) -> str:
-    digitos = re.sub(r'\D', '', valor or '')[:14]
-    if len(digitos) <= 11:
-        if len(digitos) <= 3:
-            return digitos
-        if len(digitos) <= 6:
-            return f'{digitos[:3]}.{digitos[3:]}'
-        if len(digitos) <= 9:
-            return f'{digitos[:3]}.{digitos[3:6]}.{digitos[6:]}'
-        return f'{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}'
-
-    if len(digitos) <= 2:
-        return digitos
-    if len(digitos) <= 5:
-        return f'{digitos[:2]}.{digitos[2:]}'
-    if len(digitos) <= 8:
-        return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:]}'
-    if len(digitos) <= 12:
-        return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:]}'
-    return f'{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}'
-
-
-def _formatar_telefone(valor: str | None) -> str:
-    digitos = re.sub(r'\D', '', valor or '')[:11]
-    if not digitos:
-        return ''
-    if len(digitos) <= 2:
-        return f'({digitos}'
-    if len(digitos) <= 6:
-        return f'({digitos[:2]}) {digitos[2:]}'
-    if len(digitos) <= 10:
-        return f'({digitos[:2]}) {digitos[2:6]}-{digitos[6:]}'
-    return f'({digitos[:2]}) {digitos[2:7]}-{digitos[7:]}'
-
-
-def _vincular_mascara(campo: ui.input, formatador) -> None:
-    def ao_alterar(e) -> None:
-        atual = str(e.value or '')
-        formatado = formatador(atual)
-        if atual != formatado:
-            campo.value = formatado
-
-    campo.on_value_change(ao_alterar)
-
-
 ui.add_head_html('''
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
@@ -128,7 +83,7 @@ ui.add_head_html('''
   }
   .brand-title {
     margin: 0 0 16px;
-    font-size: 40px;
+    font-size: 42px;
     font-weight: 700;
     line-height: 1.15;
     letter-spacing: -.6px;
@@ -137,7 +92,7 @@ ui.add_head_html('''
     max-width: 400px;
     margin: 0;
     color: rgba(255, 255, 255, .96);
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 400;
     line-height: 1.5;
   }
@@ -169,13 +124,13 @@ ui.add_head_html('''
   .benefit-title {
     margin-bottom: 4px;
     color: #fff;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
     line-height: 1.4;
   }
   .benefit-copy {
     color: rgba(255, 255, 255, .88);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 400;
     line-height: 1.4;
   }
@@ -202,14 +157,14 @@ ui.add_head_html('''
   .form-title {
     margin: 0 0 8px;
     color: var(--text-primary);
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 700;
     line-height: 1.3;
   }
   .form-subtitle {
     margin-bottom: 32px;
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 400;
     line-height: 1.4;
   }
@@ -218,7 +173,7 @@ ui.add_head_html('''
   .field-label {
     margin-bottom: 8px;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
     line-height: 1.4;
   }
@@ -253,7 +208,7 @@ ui.add_head_html('''
   .eco-input .q-field__native {
     padding: 0 14px !important;
     color: var(--text-primary);
-    font-size: 14px !important;
+    font-size: 15px !important;
   }
   .eco-input .q-field__native::placeholder { color: #9ca3af; opacity: 1; }
   .eco-input .q-field__bottom { display: none; }
@@ -268,7 +223,7 @@ ui.add_head_html('''
     color: #fff !important;
     background: var(--brand-green-700) !important;
     box-shadow: none !important;
-    font-size: 14px !important;
+    font-size: 15px !important;
     font-weight: 700 !important;
     text-transform: none !important;
     transition: background .18s ease, transform .08s ease;
@@ -281,7 +236,7 @@ ui.add_head_html('''
     justify-content: center;
     margin-top: 24px;
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.4;
   }
   .q-btn.signup-button,
@@ -292,7 +247,7 @@ ui.add_head_html('''
     color: var(--brand-green-700) !important;
     background: transparent !important;
     box-shadow: none !important;
-    font-size: 14px !important;
+    font-size: 15px !important;
     font-weight: 700 !important;
     line-height: 1.4 !important;
     text-decoration: none;
@@ -327,7 +282,7 @@ ui.add_head_html('''
     border-radius: 10px;
     color: #92400e;
     background: #fffbeb;
-    font-size: 12.5px;
+    font-size: 13.5px;
     line-height: 1.45;
   }
   .approval-notice .q-icon {
@@ -339,7 +294,7 @@ ui.add_head_html('''
     grid-column: 1 / -1;
     margin-top: -4px;
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.4;
   }
   .terms-row .q-checkbox__label { padding-left: 4px; }
@@ -360,8 +315,8 @@ ui.add_head_html('''
     }
     .brand-content { width: min(100%, 432px); margin: 0 auto; }
     .logo-card { width: 112px; height: 112px; margin-bottom: 16px; border-radius: 20px; }
-    .brand-title { margin-bottom: 8px; font-size: 32px; }
-    .brand-copy { max-width: 360px; font-size: 15px; }
+    .brand-title { margin-bottom: 8px; font-size: 34px; }
+    .brand-copy { max-width: 360px; font-size: 16px; }
     .benefits { display: none; }
     .form-panel {
       min-height: calc(100vh - 300px);
@@ -375,11 +330,11 @@ ui.add_head_html('''
   @media (max-width: 480px) {
     .brand-panel { padding: 24px 20px 32px; }
     .logo-card { width: 88px; height: 88px; border-radius: 16px; }
-    .brand-title { font-size: 28px; }
-    .brand-copy { font-size: 14px; }
+    .brand-title { font-size: 30px; }
+    .brand-copy { font-size: 15px; }
     .form-panel { padding: 24px 16px 48px; }
     .login-card { padding: 24px; }
-    .form-title { font-size: 22px; }
+    .form-title { font-size: 24px; }
     .form-subtitle { margin-bottom: 24px; }
     .field-group { margin-bottom: 20px; }
     .field-group.password-group { margin-bottom: 24px; }
@@ -502,20 +457,10 @@ def registration_page() -> None:
     ui.colors(primary='#15703c')
     ui.page_title('EcoFlux | Cadastro')
 
-    mapa_perfil = {
-        'Usuário': 'USUARIO',
-        'Cooperativa': 'COOPERATIVA',
-        'Empresa': 'EMPRESA',
-        'Condomínio': 'INSTITUICAO',
-    }
-
     def create_registration() -> None:
         required_fields = (
             name,
-            account_type,
-            responsible,
             document,
-            address,
             email,
             password,
             password_confirmation,
@@ -528,13 +473,13 @@ def registration_page() -> None:
             return
 
         doc_digitos = re.sub(r'\D', '', document.value or '')
-        if len(doc_digitos) not in (11, 14):
-            ui.notify('Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.', type='warning')
+        if len(doc_digitos) != 11:
+            ui.notify('Informe um CPF válido (11 dígitos, somente números).', type='warning')
             return
 
         tel_digitos = re.sub(r'\D', '', phone.value or '')
         if tel_digitos and len(tel_digitos) not in (10, 11):
-            ui.notify('Informe um telefone válido com DDD (10 ou 11 dígitos).', type='warning')
+            ui.notify('Informe um celular/telefone válido com DDD (ex: 73998144693).', type='warning')
             return
 
         if password.value != password_confirmation.value:
@@ -547,33 +492,23 @@ def registration_page() -> None:
             ui.notify('Você precisa aceitar os termos e a política de privacidade.', type='warning')
             return
 
-        perfil_api = mapa_perfil.get(str(account_type.value or ''), 'USUARIO')
-
         try:
             usuario = cadastrar_usuario(
                 nome=name.value,
                 email=email.value,
                 senha=password.value,
-                documento=document.value,
-                telefone=phone.value,
-                perfil=perfil_api,
+                documento=doc_digitos,
+                telefone=tel_digitos or None,
             )
         except ApiError as exc:
             ui.notify(exc.message, type='negative')
             return
 
         limpar_sessao()
-        if perfil_api == 'USUARIO':
-            ui.notify(
-                f'Cadastro criado com sucesso! Faça login com {usuario.email}.',
-                type='positive',
-            )
-        else:
-            ui.notify(
-                f'Cadastro de {account_type.value} enviado! A conta aguarda aprovação antes do primeiro acesso.',
-                type='warning',
-                timeout=6000,
-            )
+        ui.notify(
+            f'Cadastro criado com sucesso! Faça login com {usuario.email}.',
+            type='positive',
+        )
         ui.navigate.to('/')
 
     with ui.element('main').classes('login-page'):
@@ -584,73 +519,33 @@ def registration_page() -> None:
                 with ui.element('div').classes('login-card registration-card'):
                     ui.html('<h2 class="form-title">Cadastro</h2>', sanitize=False)
                     ui.html(
-                        '<div class="form-subtitle">Usuário, cooperativa, empresa ou condomínio</div>',
+                        '<div class="form-subtitle">Crie sua conta</div>',
                         sanitize=False,
                     )
 
                     with ui.element('div').classes('registration-form'):
                         with ui.element('div').classes('field-group'):
-                            field_label('Nome')
-                            name = ui.input(placeholder='Cond. Parque Verde').props(
-                                'outlined hide-bottom-space autocomplete=organization aria-label="Nome"'
+                            field_label('Nome completo')
+                            name = ui.input(placeholder='Luca Soares').props(
+                                'outlined hide-bottom-space autocomplete=name aria-label="Nome completo"'
                             ).classes('eco-input')
 
                         with ui.element('div').classes('field-group'):
-                            field_label('Tipo')
-                            account_type = ui.select(
-                                ['Usuário', 'Cooperativa', 'Empresa', 'Condomínio'],
-                                value='Condomínio',
-                            ).props(
-                                'outlined hide-bottom-space options-dense aria-label="Tipo"'
-                            ).classes('eco-input')
-
-                        with ui.element('div').classes('approval-notice') as approval_notice:
-                            ui.icon('hourglass_top')
-                            ui.html(
-                                '<div><strong>Aprovação necessária:</strong> cadastros de '
-                                'Cooperativa, Empresa ou Condomínio passam por aprovação '
-                                'antes de liberar o acesso.</div>',
-                                sanitize=False,
-                            )
-
-                        def atualizar_aviso_aprovacao() -> None:
-                            approval_notice.set_visibility(account_type.value != 'Usuário')
-
-                        account_type.on_value_change(lambda _e: atualizar_aviso_aprovacao())
-                        atualizar_aviso_aprovacao()
-
-                        with ui.element('div').classes('field-group'):
-                            field_label('Responsável')
-                            responsible = ui.input(placeholder='Luca Soares').props(
-                                'outlined hide-bottom-space autocomplete=name aria-label="Responsável"'
+                            field_label('CPF')
+                            document = ui.input(placeholder='Somente números (11 dígitos)').props(
+                                'outlined hide-bottom-space mask="###########" inputmode="numeric" aria-label="CPF"'
                             ).classes('eco-input')
 
                         with ui.element('div').classes('field-group'):
-                            field_label('CNPJ/CPF')
-                            document = ui.input(placeholder='000.000.000-00 ou 00.000.000/0001-00').props(
-                                'outlined hide-bottom-space inputmode=numeric maxlength=18 aria-label="CNPJ ou CPF"'
+                            field_label('Celular / Telefone', required=False)
+                            phone = ui.input(placeholder='73998144693').props(
+                                'outlined hide-bottom-space mask="###########" inputmode="numeric" aria-label="Telefone"'
                             ).classes('eco-input')
-                            _vincular_mascara(document, _formatar_cpf_cnpj)
-
-                        with ui.element('div').classes('field-group'):
-                            field_label('Telefone', required=False)
-                            phone = ui.input(placeholder='(73) 99999-9999').props(
-                                'outlined hide-bottom-space inputmode=tel maxlength=15 aria-label="Telefone"'
-                            ).classes('eco-input')
-                            _vincular_mascara(phone, _formatar_telefone)
 
                         with ui.element('div').classes('field-group'):
                             field_label('E-mail')
-                            email = ui.input(placeholder='usuario@instituicao.com').props(
+                            email = ui.input(placeholder='usuario@email.com').props(
                                 'outlined hide-bottom-space type=email autocomplete=email aria-label="E-mail"'
-                            ).classes('eco-input')
-
-                        with ui.element('div').classes('field-group field-span-2'):
-                            field_label('Endereço')
-                            address = ui.input(
-                                placeholder='Rua das Araucárias, 48, Centro — Porto Seguro — 45810-000'
-                            ).props(
-                                'outlined hide-bottom-space autocomplete=street-address aria-label="Endereço"'
                             ).classes('eco-input')
 
                         with ui.element('div').classes('field-group'):
@@ -734,10 +629,9 @@ def recovery_page() -> None:
 
                     with ui.element('div').classes('field-group password-group'):
                         field_label('CNPJ/CPF vinculado')
-                        document = ui.input(placeholder='000.000.000-00 ou 00.000.000/0001-00').props(
-                            'outlined hide-bottom-space inputmode=numeric maxlength=18 aria-label="CNPJ ou CPF"'
+                        document = ui.input(placeholder='Somente números (CPF ou CNPJ)').props(
+                            'outlined hide-bottom-space mask="##############" inputmode="numeric" aria-label="CNPJ ou CPF"'
                         ).classes('eco-input')
-                        _vincular_mascara(document, _formatar_cpf_cnpj)
                         document.on('keydown.enter', request_recovery)
 
                     ui.button('Enviar instruções', on_click=request_recovery).props(

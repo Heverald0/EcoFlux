@@ -37,6 +37,7 @@ TITLES = {
     '/rotas': 'Rotas',
     '/rotas/otimizada': 'Rotas',
     '/rotas/em-andamento': 'Rotas',
+    '/minha-instituicao': 'Minha instituição',
 }
 
 NAV = [
@@ -46,6 +47,7 @@ NAV = [
     ('Coleta', [
         ('Pontos de coleta', '/pontos-de-coleta', 'location_on'),
         ('Agendamentos', '/agendamentos', 'calendar_month'),
+        ('Rotas', '/rotas', 'alt_route'),
         ('Materiais', '/materiais', 'inventory_2'),
     ]),
     ('Desempenho', [
@@ -54,6 +56,7 @@ NAV = [
         ('EcoImpacto', '/ecoimpacto', 'bar_chart'),
     ]),
     ('Gestão', [
+        ('Minha instituição', '/minha-instituicao', 'apartment'),
         ('Relatórios', '/relatorios', 'description'),
         ('Área Educativa', '/area-educativa', 'school'),
     ]),
@@ -64,10 +67,11 @@ TONES = {
     'concluída': 'green', 'concluida': 'green',
     'realizada': 'solid', 'realizado': 'solid', 'comercializado': 'solid',
     'em análise': 'amber', 'análise': 'amber', 'analise': 'amber', 'analisar': 'amber',
-    'triagem': 'amber', 'manutenção': 'amber', 'pendente': 'amber', 'bronze': 'amber',
+    'aguardando análise': 'amber', 'triagem': 'amber', 'manutenção': 'amber',
+    'pendente': 'amber', 'bronze': 'amber',
     'enviada': 'blue', 'coletado': 'blue', 'pronto': 'blue', 'prata': 'blue',
     'em rota': 'blue',
-    'cancelada': 'red', 'bloqueado': 'red',
+    'cancelada': 'red', 'bloqueado': 'red', 'rejeitado': 'red',
     'inicial': 'gray',
 }
 
@@ -344,7 +348,7 @@ STYLES = '''
   .content-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
   .thumb { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; }
 
-/* --- timeline / stepper --- */
+  /* --- timeline / stepper --- */
   .tl-wrap { padding: 8px 6px; }
   .tl-step { display: flex; align-items: center; gap: 14px; }
   .tl-dot { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 50%; }
@@ -529,6 +533,45 @@ STYLES = '''
   .summary-val.green {
     color: var(--primary);
   }
+
+  /* --- ajuste global de fontes (+1 a +2px) --- */
+  .nav-title { font-size: 12px; }
+  .nav-item { height: 32px; font-size: 13px; }
+  .nav-item .material-symbols-outlined { font-size: 18px; }
+  .user-name { font-size: 13px; }
+  .user-role { font-size: 11px; }
+  .topbar-left { font-size: 14px; }
+  .score-badge { font-size: 12px; }
+  .page-title { font-size: 24px; }
+  .page-subtitle { font-size: 14px; }
+  .card-title { font-size: 16px; }
+  .card.card-sm .card-title { font-size: 13px; }
+  .card-subtitle { font-size: 10px; }
+  .link-more { font-size: 12px; }
+  .kpi-label { font-size: 12px; }
+  .kpi-value { font-size: 25px; }
+  .kpi-hint { font-size: 12px; }
+  .tbl { font-size: 13px; }
+  .tbl th { font-size: 12px; }
+  .badge { font-size: 11px; }
+  .rank-name, .rank-value { font-size: 14px; }
+  .rank-footer { font-size: 13px; }
+  .metric-row, .metric-stack { font-size: 11px; }
+  .item-title { font-size: 13px; }
+  .item-title.big { font-size: 16px; }
+  .item-meta, .item-right { font-size: 10px; }
+  .tl-title { font-size: 14px; }
+  .tl-meta { font-size: 12px; }
+  .form-label { font-size: 12px; }
+  .form-label.upper { font-size: 11px; }
+  .eco-field .q-field__control,
+  .eco-field .q-field__native,
+  .eco-field .q-field__marginal { height: 32px !important; min-height: 32px !important; }
+  .eco-field .q-field__native, .eco-field .q-field__input { font-size: 13px !important; }
+  .q-btn.eco-btn { height: 32px; min-height: 32px !important; font-size: 13px !important; }
+  .q-btn.eco-btn.eco-block { height: 36px; min-height: 36px !important; }
+  .q-btn.btn-ghost { height: 26px; min-height: 26px !important; font-size: 11px !important; }
+  .chip { font-size: 12px; }
 </style>
 <script>
   function ecoToast(message) {
@@ -568,6 +611,7 @@ def _rotulo_perfil_sessao() -> str:
         'EMPRESA': 'empresa',
         'COOPERATIVA': 'cooperativa',
         'USUARIO': 'usuário',
+        'MOTORISTA': 'motorista',
     }
     if not perfil:
         return 'sessão ativa'
