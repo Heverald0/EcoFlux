@@ -28,7 +28,7 @@ PRIMARY = '#1F8A43'
 
 TITLES = {
     '/dashboard': 'Dashboard',
-    '/pontos-de-coleta': 'Pontos de coleta',
+    '/pontos-de-coleta': 'EcoPonto',
     '/agendamentos': 'Agendamentos',
     '/materiais': 'Controle de materiais',
     '/ecoscore': 'EcoScore',
@@ -48,7 +48,7 @@ NAV = [
         ('Dashboard', '/dashboard', 'space_dashboard'),
     ]),
     ('Coleta', [
-        ('Pontos de coleta', '/pontos-de-coleta', 'location_on'),
+        ('EcoPonto', '/pontos-de-coleta', 'location_on'),
         ('Agendamentos', '/agendamentos', 'calendar_month'),
         ('Rotas', '/rotas', 'alt_route'),
         ('Materiais', '/materiais', 'inventory_2'),
@@ -305,6 +305,40 @@ STYLES = '''
     height: 230px;
     gap: 10px;
 }
+
+.donut {
+    position: relative;
+    border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .donut-hole {
+    position: absolute;
+    border-radius: 50%;
+    background: var(--surface);
+  }
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .legend-row span:last-child {
+    margin-left: auto;
+    font-weight: 600;
+  }
+  .legend-chip {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+    border-radius: 3px;
+  }
 
 .chart-y {
     display: flex;
@@ -647,6 +681,46 @@ STYLES = '''
   .q-btn.eco-btn.eco-block { height: 36px; min-height: 36px !important; }
   .q-btn.btn-ghost { height: 26px; min-height: 26px !important; font-size: 11px !important; }
   .chip { font-size: 12px; }
+
+  body { font-size: 15px !important; }
+  .nav-title { font-size: 13px; }
+  .nav-item { height: 34px; font-size: 14px !important; }
+  .nav-item .material-symbols-outlined { font-size: 19px; }
+  .user-name { font-size: 14px; }
+  .user-role { font-size: 12px; }
+  .topbar-left { font-size: 15px; }
+  .score-badge { font-size: 13px; }
+  .page-title { font-size: 26px; }
+  .page-subtitle { font-size: 15px; }
+  .card-title { font-size: 18px !important; }
+  .card.card-sm .card-title { font-size: 15px !important; }
+  .card-subtitle { font-size: 12px; }
+  .link-more { font-size: 13px; }
+  .kpi-label { font-size: 13px; }
+  .kpi-value { font-size: 27px; }
+  .kpi-hint { font-size: 13px; }
+  .tbl { font-size: 14px !important; }
+  .tbl th { font-size: 13px !important; }
+  .tbl td { font-size: 14px !important; }
+  .badge { font-size: 12px !important; }
+  .rank-name, .rank-value { font-size: 15px; }
+  .rank-footer { font-size: 14px; }
+  .metric-row, .metric-stack { font-size: 13px; }
+  .item-title { font-size: 15px !important; }
+  .item-title.big { font-size: 18px !important; }
+  .item-meta, .item-right, .muted { font-size: 12px; }
+  .tl-title { font-size: 15px; }
+  .tl-meta { font-size: 13px; }
+  .form-label { font-size: 13px !important; }
+  .form-label.upper { font-size: 12px !important; }
+  .eco-field .q-field__control,
+  .eco-field .q-field__native,
+  .eco-field .q-field__marginal { height: 34px !important; min-height: 34px !important; }
+  .eco-field .q-field__native, .eco-field .q-field__input { font-size: 14px !important; }
+  .q-btn.eco-btn { height: 34px; min-height: 34px !important; font-size: 14px !important; }
+  .q-btn.eco-btn.eco-block { height: 38px; min-height: 38px !important; }
+  .q-btn.btn-ghost { height: 28px; min-height: 28px !important; font-size: 12px !important; }
+  .chip { font-size: 13px; }
 </style>
 <script>
   function ecoToast(message) {
@@ -695,16 +769,25 @@ def _rotulo_perfil_sessao() -> str:
 
 def sidebar_html(route: str) -> str:
     is_admin = eh_administrador()
+    perfil = (obter_perfil_atual() or '').strip().upper()
+    pode_ver_rotas = is_admin or perfil in ('MOTORISTA', 'COOPERATIVA')
     nome_usuario = obter_nome_atual() or 'Usuário'
     rotulo_perfil = _rotulo_perfil_sessao()
 
     groups = []
     for title, items in NAV:
+        itens_visiveis = [
+            (label, href, ico)
+            for label, href, ico in items
+            if href != '/rotas' or pode_ver_rotas
+        ]
+        if not itens_visiveis:
+            continue
         links = ''.join(
             f'<a class="nav-item" href="{href}"'
             f'{" aria-current=\"page\"" if href == route else ""}>'
             f'{icon(ico)}{escape(label)}</a>'
-            for label, href, ico in items
+            for label, href, ico in itens_visiveis
         )
         groups.append(f'<div class="nav-group"><div class="nav-title">{title}</div>{links}</div>')
 
@@ -730,7 +813,6 @@ def sidebar_html(route: str) -> str:
         {footer_html}
       </aside>
     '''
-
 
 def _sair_para_inicio() -> None:
     limpar_sessao()

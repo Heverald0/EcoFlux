@@ -120,9 +120,7 @@ _LABEL_STATUS_PONTO = {
 
 _STATUS_PONTO_OPCOES = {
     'ATIVO': 'Ativo',
-    'INATIVO': 'Inativo',
     'MANUTENCAO': 'Manutenção',
-    'BLOQUEADO': 'Bloqueado',
 }
 
 _OPCOES_TIPO_MATERIAL_COLETA = {
@@ -1262,7 +1260,7 @@ def pontos_de_coleta() -> None:
 
     with layout('/pontos-de-coleta'):
         page_header(
-            'Pontos de coleta',
+            'EcoPonto',
             'Cadastre, filtre e gerencie os pontos de descarte na plataforma'
             if pode_gerenciar
             else 'Consulte e filtre os pontos de descarte disponíveis na plataforma',
@@ -1339,6 +1337,16 @@ def pontos_de_coleta() -> None:
             return payload
 
         def abrir_modal_edicao(ponto: dict[str, Any]) -> None:
+            inst_atual = ponto.get('idInstituicao')
+            if not eh_administrador():
+                pertence_inst = inst_atual is not None and int(inst_atual) in mapa_inst_usuario
+                if not pertence_inst:
+                    ui.notify(
+                        'Você só pode editar EcoPontos vinculados à sua instituição.',
+                        type='warning',
+                    )
+                    return
+
             dialog_editar.clear()
             ponto_id = ponto.get('id')
             if not ponto_id:
@@ -1382,7 +1390,7 @@ def pontos_de_coleta() -> None:
                         ed_cid = form_field('Cidade', value=str(ponto.get('cidade') or ''))
 
                     with ui.element('div').classes('form-grid cols-2'):
-                        ed_uf = form_field('UF', options=_UFS_BRASIL, value=None, props='mask="AA"')
+                        ed_uf = form_field('UF', options=_UFS_BRASIL, value=(str(ponto.get('estado') or '').upper() or None))
                         ed_cep = form_field(
                             'CEP',
                             value=re.sub(r'\D', '', str(ponto.get('cep') or '')),
@@ -1670,7 +1678,8 @@ def agendamentos() -> None:
         vinculos_morador = []
 
     eh_morador = len(vinculos_morador) > 0
-    pode_agendar = perfil_atual in ('INSTITUICAO', 'EMPRESA', 'ADMINISTRADOR') or eh_morador
+    pode_escolher_ponto = perfil_atual in ('INSTITUICAO', 'EMPRESA', 'ADMINISTRADOR')
+    pode_agendar = pode_escolher_ponto or eh_morador
 
     with layout('/agendamentos'):
         page_header(
@@ -1686,6 +1695,7 @@ def agendamentos() -> None:
 
         mapa_instituicoes: dict[int, str] = {}
         mapa_cooperativas: dict[int, str] = {}
+        pontos_por_id: dict[int, dict[str, Any]] = {}
 
         try:
             for inst in listar_minhas_instituicoes():
@@ -1721,6 +1731,25 @@ def agendamentos() -> None:
                     mapa_cooperativas[coop_id] = str(coop.get('nome') or f'Cooperativa #{coop_id}')
         except ApiError:
             pass
+
+        if pode_escolher_ponto:
+            try:
+                for pt in listar_pontos_coleta(status='ATIVO'):
+                    if pt.get('id') is not None:
+                        pontos_por_id[int(pt['id'])] = pt
+            except ApiError:
+                pass
+
+        def _opcoes_pontos_para_inst(inst_id: int | None) -> dict[int, str]:
+            opcoes: dict[int, str] = {}
+            for pid, pt in pontos_por_id.items():
+                pt_inst = pt.get('idInstituicao')
+                if inst_id is not None:
+                    if pt_inst is not None and int(pt_inst) == int(inst_id):
+                        opcoes[pid] = str(pt.get('nome') or f'Ponto #{pid}')
+                elif eh_administrador():
+                    opcoes[pid] = str(pt.get('nome') or f'Ponto #{pid}')
+            return opcoes
 
         def _buscar_coletas_disponiveis() -> list[dict[str, Any]]:
             if eh_administrador():
@@ -1764,6 +1793,19 @@ def agendamentos() -> None:
                                 value=inst_padrao,
                             ).props(props_inst).classes('eco-field')
 
+                        ponto_select = None
+                        if pode_escolher_ponto:
+                            opcoes_iniciais_pt = _opcoes_pontos_para_inst(inst_padrao)
+                            with ui.element('div'):
+                                h('<label class="form-label">Ponto de descarte (opcional)</label>')
+                                ponto_select = ui.select(
+                                    opcoes_iniciais_pt,
+                                    value=None,
+                                ).props(
+                                    'outlined dense hide-bottom-space options-dense clearable '
+                                    'aria-label="Ponto de descarte"'
+                                ).classes('eco-field')
+
                         material = form_field(
                             'Tipo do material',
                             options=list(_OPCOES_TIPO_MATERIAL_COLETA.values()),
@@ -1782,6 +1824,29 @@ def agendamentos() -> None:
                             placeholder='Rua, Numero, Bairro, Cidade',
                         )
                         observacoes = form_field('Observações', placeholder='Informações disponíveis...')
+
+                        if ponto_select is not None:
+                            def _ao_mudar_instituicao(e) -> None:
+                                inst_val = int(e.value) if e.value is not None else None
+                                ponto_select.options = _opcoes_pontos_para_inst(inst_val)
+                                ponto_select.value = None
+                                ponto_select.update()
+
+                            def _ao_mudar_ponto(e) -> None:
+                                if e.value is None:
+                                    return
+                                pt = pontos_por_id.get(int(e.value))
+                                if not pt:
+                                    return
+                                endereco_coleta.value = (
+                                    f"{pt.get('logradouro') or ''}, {pt.get('numero') or ''}, "
+                                    f"{pt.get('bairro') or ''}, {pt.get('cidade') or ''}"
+                                )
+                                if not (observacoes.value or '').strip():
+                                    observacoes.value = f"Retirada no ponto de descarte: {pt.get('nome') or ''}"
+
+                            instituicao_select.on_value_change(_ao_mudar_instituicao)
+                            ponto_select.on_value_change(_ao_mudar_ponto)
 
                         def enviar() -> None:
                             if not _obrigatorios(
@@ -1825,6 +1890,16 @@ def agendamentos() -> None:
                                 ui.notify('A quantidade estimada deve ser no mínimo 0.1 kg.', type='warning')
                                 return
 
+                            pt_sel = (
+                                pontos_por_id.get(int(ponto_select.value))
+                                if ponto_select is not None and ponto_select.value is not None
+                                else None
+                            )
+                            uf_val = str(pt_sel.get('estado') or 'BA').strip().upper() if pt_sel else 'BA'
+                            cep_val = re.sub(r'\D', '', str(pt_sel.get('cep') or '')) if pt_sel else ''
+                            if len(cep_val) != 8:
+                                cep_val = '45820000'
+
                             logradouro, numero, bairro, cidade = end_split
                             payload: dict[str, Any] = {
                                 'dataHoraAgendamento': data_hora_iso,
@@ -1836,8 +1911,8 @@ def agendamentos() -> None:
                                 'numero': numero,
                                 'bairro': bairro,
                                 'cidade': cidade,
-                                'estado': 'BA',
-                                'cep': '45820000',
+                                'estado': uf_val,
+                                'cep': cep_val,
                             }
                             if mapa_instituicoes and instituicao_select.value is not None:
                                 payload['instituicaoId'] = int(instituicao_select.value)
@@ -1854,6 +1929,8 @@ def agendamentos() -> None:
                                 data.value = ''
                                 endereco_coleta.value = ''
                                 observacoes.value = ''
+                                if ponto_select is not None:
+                                    ponto_select.value = None
                                 if carregar_coletas_ref[0]:
                                     carregar_coletas_ref[0](
                                         notificar_erro=True,
@@ -1889,8 +1966,8 @@ def agendamentos() -> None:
                               '<div class="muted" style="font-size:13px;padding:8px 0">'
                               'Nenhuma solicitação selecionada.</div>')
                             return
-                        h(f'<div class="card-head"><div><div class="card-title">'
-                          f'Status da solicitação</div></div></div>')
+                        h('<div class="card-head"><div><div class="card-title">'
+                          'Status da solicitação</div></div></div>')
 
                         detalhe_coleta: dict[str, Any] = {}
                         resumo_partes: list[str] = []
