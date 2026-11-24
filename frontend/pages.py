@@ -55,6 +55,10 @@ from api_client import (
     concluir_entrega_motorista,
     listar_minha_rota_motorista,
     obter_perfil_atual,
+    listar_artigos_educativos,
+    buscar_artigo_por_slug,
+    listar_guia_triagem,
+    criar_artigo_educativo,
 )
 import mocks as m
 from ui_kit import (
@@ -430,6 +434,21 @@ def _normalizar_nome_ranking(nome: str) -> str:
         return limpo.title()
     return limpo
 
+def _censurar_nome_ranking(nome: str, nome_usuario_atual: str) -> str:
+    """Mantem o nome completo apenas do usuario logado; censura os demais (ex: Ad*** *****ux)."""
+    limpo = _normalizar_nome_ranking(nome)
+    atual = _normalizar_nome_ranking(nome_usuario_atual)
+    if not limpo or limpo.lower() == atual.lower():
+        return limpo
+
+    if len(limpo) <= 4:
+        return limpo[0] + '***'
+
+    inicio = limpo[:2]
+    fim = limpo[-2:]
+    meio = ''.join(' ' if ch == ' ' else '*' for ch in limpo[2:-2])
+    return f'{inicio}{meio}{fim}'
+
 
 def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
     """Busca dados reais disponiveis na API para KPIs e solicitacoes recentes."""
@@ -651,8 +670,13 @@ def _ultimos_5_meses_base_atual() -> list[tuple[int, int]]:
 
 
 def _montar_dados_ecoimpacto() -> dict[str, Any]:
-    """Busca dados reais de EcoImpacto, coletas e instituicoes sem mascarar ausencia de dados."""
-    kpis_out = list(m.KPIS_ECOIMPACTO)
+    """Busca dados reais de EcoImpacto, coletas e instituicoes sem vazar mocks."""
+    kpis_out = [
+        replace(m.KPIS_ECOIMPACTO[0], label='CO2 EVITADO', value='0 kg', hint='sem registro no período'),
+        replace(m.KPIS_ECOIMPACTO[1], label='ÁRVORES PRESERVADAS', value='0', hint='equivalência estimada'),
+        replace(m.KPIS_ECOIMPACTO[2], label='ÁGUA ECONOMIZADA', value='0 L', hint='sem economia no período'),
+        replace(m.KPIS_ECOIMPACTO[3], label='ENERGIA POUPADA', value='0 kWh', hint='por reciclagem'),
+    ]
     slices_out: list[m.Slice] = []
     tem_meses_reais = False
     equivalencias_out = [
@@ -661,6 +685,7 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
         m.Item(title='0', meta='coletas concluídas', tone='amber'),
     ]
     impacto_inst_out: list[m.Metric] = []
+    erro_api: str | None = None
 
     dados: dict[str, Any] | None = None
     for fetcher in (buscar_ecoimpacto_global, buscar_meu_ecoimpacto):
@@ -668,8 +693,10 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
             res = fetcher()
             if isinstance(res, dict) and res:
                 dados = res
+                erro_api = None
                 break
-        except ApiError:
+        except ApiError as exc:
+            erro_api = exc.message
             continue
 
     coletas: list[dict[str, Any]] = []
@@ -710,34 +737,10 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
             else 'sem economia no período'
         )
 
-        if len(kpis_out) >= 1:
-            kpis_out[0] = replace(
-                kpis_out[0],
-                label='CO2 EVITADO',
-                value=_formatar_co2_kpi(co2_kg),
-                hint=hint_co2,
-            )
-        if len(kpis_out) >= 2:
-            kpis_out[1] = replace(
-                kpis_out[1],
-                label='ÁRVORES PRESERVADAS',
-                value=_formatar_numero_pt(arvores),
-                hint='equivalência estimada',
-            )
-        if len(kpis_out) >= 3:
-            kpis_out[2] = replace(
-                kpis_out[2],
-                label='ÁGUA ECONOMIZADA',
-                value=_formatar_agua_kpi(agua_l),
-                hint=hint_agua,
-            )
-        if len(kpis_out) >= 4:
-            kpis_out[3] = replace(
-                kpis_out[3],
-                label='ENERGIA POUPADA',
-                value=_formatar_energia_kpi(energia_kwh),
-                hint='por reciclagem',
-            )
+        kpis_out[0] = replace(kpis_out[0], value=_formatar_co2_kpi(co2_kg), hint=hint_co2)
+        kpis_out[1] = replace(kpis_out[1], value=_formatar_numero_pt(arvores), hint='equivalência estimada')
+        kpis_out[2] = replace(kpis_out[2], value=_formatar_agua_kpi(agua_l), hint=hint_agua)
+        kpis_out[3] = replace(kpis_out[3], value=_formatar_energia_kpi(energia_kwh), hint='por reciclagem')
 
         detalhes = dados.get('detalhamentoPorMaterial')
         if isinstance(detalhes, list) and detalhes:
@@ -776,21 +779,9 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
                 slices_out = [s for s in novas_slices if s.pct > 0]
 
         equivalencias_out = [
-            m.Item(
-                title=_formatar_co2_kpi(co2_kg),
-                meta='de CO2 evitadas',
-                tone='green',
-            ),
-            m.Item(
-                title=_formatar_co2_kpi(total_kg),
-                meta='fora de aterros',
-                tone='blue',
-            ),
-            m.Item(
-                title=str(total_coletas),
-                meta='coletas concluídas',
-                tone='amber',
-            ),
+            m.Item(title=_formatar_co2_kpi(co2_kg), meta='de CO2 evitadas', tone='green'),
+            m.Item(title=_formatar_co2_kpi(total_kg), meta='fora de aterros', tone='blue'),
+            m.Item(title=str(total_coletas), meta='coletas concluídas', tone='amber'),
         ]
 
     janela_5_meses = _ultimos_5_meses_base_atual()
@@ -801,11 +792,11 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
         st = str(c.get('status') or '').upper()
         if st == 'CANCELADA':
             continue
-        kg = float(c.get('quantidadeEstimadaKg') or 0)
+        kg = float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
         if kg <= 0:
             continue
 
-        data_ref = str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
+        data_ref = str(c.get('dataConclusao') or c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
         if len(data_ref) >= 7:
             try:
                 dt = datetime.fromisoformat(data_ref.replace('Z', ''))
@@ -855,11 +846,11 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
         'tem_meses_reais': tem_meses_reais,
         'equivalencias': equivalencias_out,
         'impacto_inst': impacto_inst_out,
+        'erro_api': erro_api,
     }
 
-
 def _montar_dados_ecoselo() -> dict[str, Any]:
-    """Busca apenas selos reais vinculados ao usuário autenticado em /api/v1/ecoselos/meus."""
+    """Busca os selos reais do usuario autenticado em /api/v1/ecoselos/meus."""
     selos: list[dict[str, Any]] = []
     try:
         res = listar_meus_ecoselos()
@@ -869,44 +860,67 @@ def _montar_dados_ecoselo() -> dict[str, Any]:
         selos = []
 
     qtd_total = len(selos)
-    qtd_ouro = sum(
-        1 for s in selos
-        if 'OURO' in str(
-            s.get('nivel') or s.get('selo') or s.get('nome') or s.get('codigo') or ''
-        ).upper()
+    conquistados = [s for s in selos if bool(s.get('conquistado'))]
+    em_andamento = [
+        s for s in selos
+        if not bool(s.get('conquistado')) and int(s.get('progressoAtual') or 0) > 0
+    ]
+    qtd_conquistados = len(conquistados)
+    qtd_andamento = len(em_andamento)
+
+    progresso_medio = (
+        int(round(sum(int(s.get('progressoPercentual') or 0) for s in selos) / qtd_total))
+        if qtd_total > 0
+        else 0
     )
 
     kpis_out = [
         replace(
             m.KPIS_ECOSELO[0],
             label='SELOS CONQUISTADOS',
-            value=_fmt_qtd_admin(qtd_total),
-            hint='vinculados à sua conta' if qtd_total else 'nenhum selo conquistado',
+            value=_fmt_qtd_admin(qtd_conquistados),
+            hint=f'de {qtd_total} disponíveis' if qtd_total else 'nenhum selo disponível',
         ),
         replace(
             m.KPIS_ECOSELO[1],
-            label='SELO OURO',
-            value=_fmt_qtd_admin(qtd_ouro),
-            hint='nível ouro' if qtd_ouro else 'nenhum selo ouro',
+            label='EM ANDAMENTO',
+            value=_fmt_qtd_admin(qtd_andamento),
+            hint='com progresso iniciado' if qtd_andamento else 'nenhum em andamento',
         ),
         replace(
             m.KPIS_ECOSELO[2],
-            label='ADERÊNCIA MÉDIA',
-            value='-',
-            hint='não fornecido pela API',
+            label='PROGRESSO MÉDIO',
+            value=f'{progresso_medio}%',
+            hint='média geral dos selos',
         ),
         replace(
             m.KPIS_ECOSELO[3],
-            label='RENOVAÇÕES',
-            value='-',
-            hint='não fornecido pela API',
+            label='CATÁLOGO DE SELOS',
+            value=_fmt_qtd_admin(qtd_total),
+            hint='selos cadastrados',
         ),
+    ]
+
+    destaque = None
+    if conquistados:
+        destaque = conquistados[0]
+    elif selos:
+        destaque = max(selos, key=lambda s: int(s.get('progressoPercentual') or 0))
+
+    metricas_progresso = [
+        m.Metric(
+            label=str(s.get('titulo') or s.get('codigo') or 'Selo'),
+            value=f"{int(s.get('progressoAtual') or 0)}/{int(s.get('metaExigida') or 0)}",
+            pct=max(0, min(100, int(s.get('progressoPercentual') or 0))),
+        )
+        for s in selos
     ]
 
     return {
         'kpis': kpis_out,
         'selos': selos,
-        'destaque': selos[0] if selos else None,
+        'destaque': destaque,
+        'metricas_progresso': metricas_progresso,
     }
 
 
@@ -919,40 +933,42 @@ def _montar_dados_ecoscore() -> dict[str, Any]:
     except ApiError:
         meu_score = {}
 
-    pontos_num = int(round(float(
-        meu_score.get('pontuacaoTotal')
-        or meu_score.get('pontuacao')
-        or meu_score.get('pontos')
-        or meu_score.get('score')
-        or 0
-    )))
+    pontos_num = int(round(float(meu_score.get('pontuacaoTotal') or 0)))
     nome_exibicao = _normalizar_nome_ranking(str(
-        meu_score.get('nomeUsuario')
-        or meu_score.get('nomeInstituicao')
-        or meu_score.get('nome')
-        or nome_usuario
+        meu_score.get('nomeUsuario') or nome_usuario
     )) or nome_usuario
 
-    nivel_atual = str(
-        meu_score.get('nivel')
-        or meu_score.get('classificacao')
-        or meu_score.get('selo')
-        or ('Iniciante' if pontos_num == 0 else 'EcoSelo Ativo')
-    ).strip()
+    nivel_atual = str(meu_score.get('nivel') or 'Iniciante').strip()
+    prox_meta = int(round(float(meu_score.get('proximoNivelPontos') or 0)))
+    pct_score = max(0, min(100, int(round(float(meu_score.get('progressoPercentualNivel') or 0)))))
 
-    prox_meta = int(round(float(meu_score.get('proximaMetaPontos') or 0)))
-    faltam_pts = int(round(float(meu_score.get('pontosParaProximoNivel') or 0)))
-    if prox_meta > 0:
-        pct_score = max(0, min(100, int(round((pontos_num / prox_meta) * 100))))
-    else:
-        pct_score = max(0, min(100, int(round((pontos_num / 2000) * 100)))) if pontos_num > 0 else 0
+    coletas_concluidas = int(meu_score.get('coletasConcluidas') or 0)
+    diversidade_materiais = int(meu_score.get('diversidadeMateriais') or 0)
+    total_reciclado_kg = float(meu_score.get('totalRecicladoKg') or 0)
 
-    if faltam_pts > 0:
-        meta_texto = f'+{faltam_pts} pts para o próximo nível'
-    elif meu_score:
-        meta_texto = f'{int(meu_score.get("totalColetasConcluidas") or 0)} coletas concluídas'
+    faltam_pts = max(0, prox_meta - pontos_num)
+    if prox_meta > 0 and faltam_pts > 0:
+        meta_texto = f'+{_formatar_numero_pt(float(faltam_pts))} pts para o próximo nível'
     else:
-        meta_texto = 'Pontuação calculada conforme suas coletas concluídas'
+        meta_texto = f'{coletas_concluidas} coleta{"s" if coletas_concluidas != 1 else ""} concluída{"s" if coletas_concluidas != 1 else ""}'
+
+    criterios = [
+        m.Metric(
+            label='Coletas concluídas',
+            value=str(coletas_concluidas),
+            pct=min(100, coletas_concluidas * 10) if coletas_concluidas > 0 else 0,
+        ),
+        m.Metric(
+            label='Diversidade de materiais',
+            value=f'{diversidade_materiais} / 8 tipos',
+            pct=min(100, int(round((diversidade_materiais / 8) * 100))) if diversidade_materiais > 0 else 0,
+        ),
+        m.Metric(
+            label='Total reciclado',
+            value=f'{_formatar_numero_pt(total_reciclado_kg)} kg',
+            pct=min(100, int(round((total_reciclado_kg / 500) * 100))) if total_reciclado_kg > 0 else 0,
+        ),
+    ]
 
     ranking_bruto: list[dict[str, Any]] = []
     try:
@@ -963,25 +979,15 @@ def _montar_dados_ecoscore() -> dict[str, Any]:
     ranking_itens: list[m.Metric] = []
     if ranking_bruto:
         def _pts_item(r: dict[str, Any]) -> float:
-            return float(
-                r.get('pontuacaoTotal')
-                or r.get('pontuacao')
-                or r.get('pontos')
-                or r.get('score')
-                or 0
-            )
+            return float(r.get('pontuacaoTotal') or 0)
 
         ranking_ordenado = sorted(ranking_bruto, key=_pts_item, reverse=True)
         max_pts = max((_pts_item(r) for r in ranking_ordenado), default=0.0)
 
         for idx, r in enumerate(ranking_ordenado[:10], start=1):
             pts_r = int(round(_pts_item(r)))
-            nome_r = _normalizar_nome_ranking(str(
-                r.get('nomeUsuario')
-                or r.get('nomeInstituicao')
-                or r.get('nome')
-                or f'Participante #{idx}'
-            ))
+            nome_bruto = str(r.get('nomeUsuario') or f'Participante #{idx}')
+            nome_r = _censurar_nome_ranking(nome_bruto, nome_exibicao)
             pct_r = int(round((pts_r / max_pts) * 100)) if max_pts > 0 else 0
             ranking_itens.append(
                 _construir_rank_item(
@@ -1008,7 +1014,7 @@ def _montar_dados_ecoscore() -> dict[str, Any]:
     for c in coletas:
         if str(c.get('status') or '').upper() == 'CANCELADA':
             continue
-        kg = float(c.get('quantidadeEstimadaKg') or 0)
+        kg = float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
         if kg <= 0:
             continue
         data_ref = str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
@@ -1037,6 +1043,7 @@ def _montar_dados_ecoscore() -> dict[str, Any]:
         'pct_score': pct_score,
         'nivel': nivel_atual,
         'meta_texto': meta_texto,
+        'criterios': criterios,
         'ranking': ranking_itens,
         'total_participantes': len(ranking_bruto),
         'meses': meses_out,
@@ -2112,8 +2119,7 @@ def ecoscore() -> None:
                         </div>
                       </div>
                       <div style="font-size:12px;font-weight:500;margin-bottom:6px">Critérios de pontuação</div>''')
-                h('<div class="muted" style="font-size:12px;padding:6px 0">'
-                  'Detalhamento por critério não disponível na API no momento.</div>')
+                metric_list(dados_es['criterios'])
 
             with card():
                 meses_select = [
@@ -2154,89 +2160,112 @@ def ecoscore() -> None:
 
 @ui.page('/ecoselo')
 def ecoselo() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
     with layout('/ecoselo'):
-        page_header('Certificação ambiental',
-                    'Selos de desempenho para reconhecer instituições sustentáveis')
+        page_header(
+            'Certificação ambiental',
+            'Selos de desempenho conquistados a partir das suas coletas concluídas',
+        )
         dados_selo = _montar_dados_ecoselo()
         kpi_row(dados_selo['kpis'])
 
         with grid('2'):
-            with card():
+            with card('Selo em destaque'):
                 destaque = dados_selo['destaque']
                 if destaque:
-                    nome_selo = str(
-                        destaque.get('nome')
-                        or destaque.get('titulo')
-                        or destaque.get('nivel')
-                        or destaque.get('codigo')
-                        or 'EcoSelo'
-                    )
-                    entidade_selo = str(
-                        destaque.get('instituicaoNome')
-                        or destaque.get('nomeInstituicao')
-                        or destaque.get('descricao')
-                        or ''
-                    )
-                    validade_selo = str(
-                        destaque.get('validade')
-                        or destaque.get('dataValidade')
-                        or ''
+                    titulo_selo = str(destaque.get('titulo') or destaque.get('codigo') or 'EcoSelo')
+                    desc_selo = str(destaque.get('descricao') or '')
+                    criterio_selo = str(destaque.get('criterio') or '')
+                    conquistado = bool(destaque.get('conquistado'))
+                    atual = int(destaque.get('progressoAtual') or 0)
+                    meta = int(destaque.get('metaExigida') or 0)
+                    pct = int(destaque.get('progressoPercentual') or 0)
+                    status_badge = (
+                        '<span class="badge b-green">Conquistado</span>'
+                        if conquistado
+                        else f'<span class="badge b-amber">Progresso: {atual}/{meta} ({pct}%)</span>'
                     )
                     h(f'''<div style="display:flex;align-items:center;justify-content:space-between;
-                                     gap:16px;margin-bottom:18px">
+                                     gap:16px;margin-bottom:10px">
                             <div>
                               <div style="color:{PRIMARY};font-size:16px;font-weight:600">
-                                {escape(nome_selo)}</div>
-                              <div style="font-size:12px;font-weight:500">{escape(entidade_selo)}</div>
-                              <div class="muted" style="font-size:11px;margin-top:14px">
-                                {escape(validade_selo)}</div>
+                                {escape(titulo_selo)}</div>
+                              <div style="font-size:13px;margin-top:4px">{escape(desc_selo)}</div>
+                              <div class="muted" style="font-size:12px;margin-top:8px">
+                                <strong>Critério:</strong> {escape(criterio_selo)}</div>
+                              <div style="margin-top:10px">{status_badge}</div>
                             </div>
                             <div class="seal"><div class="seal-inner">Eco</div></div>
                           </div>''')
                 else:
                     h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                      'Nenhum selo conquistado ou vinculado até o momento.</div>')
+                      'Nenhum selo disponível no momento.</div>')
 
-            with card('Painel de certificação'):
-                if dados_selo['selos']:
-                    rows_selo: list[tuple] = []
-                    for s in dados_selo['selos']:
-                        nome_item = str(
-                            s.get('nome')
-                            or s.get('titulo')
-                            or s.get('instituicaoNome')
-                            or s.get('codigo')
-                            or f"Selo #{s.get('id') or '-'}"
-                        )
-                        pts_item = str(s.get('pontuacao') or s.get('score') or '-')
-                        nivel_item = str(s.get('nivel') or s.get('selo') or s.get('status') or 'Ativo')
-                        rows_selo.append((nome_item, pts_item, m.Badge(nivel_item)))
-                    data_table(m.Table(columns=('Selo / Instituição', 'Score', 'Status'), rows=rows_selo))
+            with card('Progresso por selo'):
+                if dados_selo['metricas_progresso']:
+                    metric_list(dados_selo['metricas_progresso'], alternate=True, bar_width='240px')
                 else:
                     h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                      'Nenhuma certificação registrada até o momento.</div>')
+                      'Sem métricas de selos disponíveis.</div>')
 
-        with grid('3'):
-            with card('Critérios do selo', cls='card-sm'):
-                metric_list(m.CRITERIOS_SELO, alternate=True, bar_width='60px')
-            with card('Ações recomendadas', cls='card-sm'):
-                item_list(m.ACOES_RECOMENDADAS, divided=False)
-            with card('Etapas de certificação', cls='card-sm'):
-                dot_steps(m.ETAPAS_CERTIFICACAO)
+        with card('Painel de certificação'):
+            if dados_selo['selos']:
+                rows_selo: list[tuple] = []
+                for s in dados_selo['selos']:
+                    titulo_item = str(s.get('titulo') or s.get('codigo') or '-')
+                    criterio_item = str(s.get('criterio') or '-')
+                    atual = int(s.get('progressoAtual') or 0)
+                    meta = int(s.get('metaExigida') or 0)
+                    pct = int(s.get('progressoPercentual') or 0)
+                    conquistado = bool(s.get('conquistado'))
 
+                    if conquistado:
+                        badge = m.Badge('Conquistado', 'green')
+                    elif atual > 0:
+                        badge = m.Badge('Em andamento', 'amber')
+                    else:
+                        badge = m.Badge('Bloqueado', 'gray')
+
+                    rows_selo.append((
+                        titulo_item,
+                        criterio_item,
+                        f'{atual}/{meta} ({pct}%)',
+                        badge,
+                    ))
+                data_table(
+                    m.Table(
+                        columns=('Selo', 'Critério', 'Progresso', 'Status'),
+                        rows=rows_selo,
+                    )
+                )
+            else:
+                h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                  'Nenhuma certificação registrada até o momento.</div>')
 
 @ui.page('/ecoimpacto')
 def ecoimpacto() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
     with layout('/ecoimpacto'):
-        page_header('Impacto ambiental',
-                    'Indicadores de CO2, economia de recursos e resultados sustentáveis')
+        page_header(
+            'Impacto ambiental',
+            'Indicadores de CO2, economia de recursos e resultados sustentáveis',
+        )
         dados_ei = _montar_dados_ecoimpacto()
+        if dados_ei['erro_api']:
+            ui.notify(dados_ei['erro_api'], type='warning')
+
         kpi_row(dados_ei['kpis'])
 
         with grid('2'):
             with card('Evolução de impacto - 05 meses'):
                 h('<div class="muted" style="font-size:12px;margin:-4px 0 10px">'
-                  'CO₂ evitado, água e energia poupada em escala agregada</div>')
+                  'Volume reciclado registrado nos últimos 5 meses</div>')
                 if dados_ei['tem_meses_reais']:
                     bar_chart(dados_ei['meses'])
                 else:
@@ -2249,10 +2278,7 @@ def ecoimpacto() -> None:
                     h('<div class="muted" style="font-size:12px;padding:8px 0">'
                       'Nenhum material reciclado registrado até o momento.</div>')
 
-        with grid('3'):
-            with card('Metas ESG', cls='card-sm'):
-                h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                  'Nenhuma meta ESG configurada no sistema até o momento.</div>')
+        with grid('2'):
             with card('Equivalências ambientais', cls='card-sm'):
                 item_list(dados_ei['equivalencias'], big_title=True)
             with card('Impacto por instituição', cls='card-sm'):
@@ -2265,95 +2291,532 @@ def ecoimpacto() -> None:
 
 @ui.page('/relatorios')
 def relatorios() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    import csv
+    import io
+
     with layout('/relatorios'):
-        page_header('Relatórios operacionais e ambientais',
-                    'Gere documentos para gestão logística, ESG e prestação de contas')
-        kpi_row(m.KPIS_RELATORIOS)
+        page_header(
+            'Relatórios operacionais e ambientais',
+            'Gere documentos reais em CSV para gestão logística, ESG e prestação de contas',
+        )
+
+        # Carrega dados reais
+        coletas: list[dict[str, Any]] = []
+        try:
+            coletas = listar_coletas_operacional()
+        except ApiError:
+            try:
+                coletas = listar_minhas_coletas()
+            except ApiError:
+                coletas = []
+
+        instituicoes_lista: list[dict[str, Any]] = []
+        try:
+            instituicoes_lista = listar_instituicoes() + listar_cooperativas()
+        except ApiError:
+            instituicoes_lista = []
+
+        nomes_inst: list[str] = sorted({
+            str(i.get('nome') or '').strip()
+            for i in instituicoes_lista
+            if str(i.get('nome') or '').strip()
+        })
+
+        impacto: dict[str, Any] = {}
+        for fetcher in (buscar_ecoimpacto_global, buscar_meu_ecoimpacto):
+            try:
+                res = fetcher()
+                if isinstance(res, dict) and res:
+                    impacto = res
+                    break
+            except ApiError:
+                continue
+
+        # KPIs reais
+        concluidas = [
+            c for c in coletas
+            if str(c.get('status') or '').upper() in ('CONCLUIDA', 'REALIZADA')
+        ]
+        pendentes = [
+            c for c in coletas
+            if str(c.get('status') or '').upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA', 'EM_ANDAMENTO')
+        ]
+        total_kg = sum(
+            float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+            for c in concluidas
+        )
+        co2_evitado = float(impacto.get('co2EvitadoKg') or 0)
+
+        kpis_reais = [
+            replace(
+                m.KPIS_RELATORIOS[0],
+                label='COLETAS CONCLUÍDAS',
+                value=str(len(concluidas)),
+                hint=f'de {len(coletas)} registradas',
+            ),
+            replace(
+                m.KPIS_RELATORIOS[1],
+                label='VOLUME RECICLADO',
+                value=f'{_formatar_numero_pt(total_kg)} kg',
+                hint='coletas finalizadas',
+            ),
+            replace(
+                m.KPIS_RELATORIOS[2],
+                label='CO₂ EVITADO',
+                value=_formatar_co2_kpi(co2_evitado),
+                hint='impacto acumulado',
+            ),
+            replace(
+                m.KPIS_RELATORIOS[3],
+                label='PENDÊNCIAS',
+                value=str(len(pendentes)),
+                hint='em aberto ou em rota',
+            ),
+        ]
+        kpi_row(kpis_reais)
+
+        # Opções dinâmicas de período (últimos 6 meses + Todo o período)
+        agora = datetime.now()
+        opcoes_periodo: dict[str, str] = {'TODOS': 'Todo o período'}
+        for offset in range(6):
+            ano_p = agora.year
+            mes_p = agora.month - offset
+            while mes_p <= 0:
+                mes_p += 12
+                ano_p -= 1
+            chave_p = f'{ano_p:04d}-{mes_p:02d}'
+            opcoes_periodo[chave_p] = f'{_MESES_CURTOS[mes_p - 1]}/{ano_p}'
+
+        tipos_relatorio = {
+            'OPERACIONAL': 'Operacional (Coletas)',
+            'MATERIAIS': 'Materiais Reciclados',
+            'ESG': 'ESG / Impacto Ambiental',
+        }
+
+        historico_gerados: list[dict[str, Any]] = []
+
+        def _filtrar_coletas(periodo_cod: str, inst_nome: str) -> list[dict[str, Any]]:
+            filtradas: list[dict[str, Any]] = []
+            for c in coletas:
+                if periodo_cod != 'TODOS':
+                    data_ref = str(
+                        c.get('dataConclusao')
+                        or c.get('dataHoraAgendamento')
+                        or c.get('dataCriacao')
+                        or ''
+                    )
+                    if not data_ref.startswith(periodo_cod):
+                        continue
+
+                if inst_nome != 'Todas':
+                    orig = str(c.get('nomeInstituicao') or '').strip()
+                    dest = str(c.get('nomeCooperativa') or '').strip()
+                    if orig != inst_nome and dest != inst_nome:
+                        continue
+
+                filtradas.append(c)
+            return filtradas
+
+        def _montar_csv(tipo_cod: str, periodo_cod: str, inst_nome: str) -> tuple[bytes, str, int]:
+            buf = io.StringIO()
+            writer = csv.writer(buf, delimiter=';')
+            filtradas = _filtrar_coletas(periodo_cod, inst_nome)
+
+            if tipo_cod == 'ESG':
+                writer.writerow(['Indicador', 'Valor'])
+                writer.writerow(['Período', opcoes_periodo.get(periodo_cod, periodo_cod)])
+                writer.writerow(['Instituição', inst_nome])
+                writer.writerow(['Coletas no filtro', len(filtradas)])
+                peso_f = sum(float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0) for c in filtradas)
+                writer.writerow(['Volume total (kg)', f'{peso_f:.2f}'.replace('.', ',')])
+                writer.writerow(['CO2 evitado global (kg)', f'{co2_evitado:.2f}'.replace('.', ',')])
+                writer.writerow(['Árvores preservadas (equiv.)', str(impacto.get('arvoresPreservadasEquivalentes') or 0)])
+                writer.writerow(['Água economizada (L)', str(impacto.get('aguaEconomizadaLitros') or 0)])
+                writer.writerow(['Energia poupada (kWh)', str(impacto.get('energiaEconomizadaKwh') or 0)])
+                qtd_linhas = len(filtradas)
+            elif tipo_cod == 'MATERIAIS':
+                writer.writerow(['Material', 'Qtd Coletas', 'Peso Total (kg/L)'])
+                por_mat: dict[str, list[float]] = {}
+                for c in filtradas:
+                    cod = str(c.get('tipoMaterial') or 'OUTRO').upper()
+                    lbl = _ENUM_PARA_CHIP.get(cod, cod)
+                    kg = float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+                    por_mat.setdefault(lbl, []).append(kg)
+                for lbl, vals in sorted(por_mat.items()):
+                    writer.writerow([lbl, len(vals), f'{sum(vals):.2f}'.replace('.', ',')])
+                qtd_linhas = len(por_mat)
+            else:
+                writer.writerow([
+                    'ID', 'Data', 'Material', 'Peso Estimado (kg)', 'Peso Real (kg)',
+                    'Origem', 'Cooperativa', 'Status',
+                ])
+                for c in filtradas:
+                    cod = str(c.get('tipoMaterial') or '').upper()
+                    st = str(c.get('status') or '').upper()
+                    writer.writerow([
+                        c.get('id') or '',
+                        _formatar_data_curta(str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')),
+                        _ENUM_PARA_CHIP.get(cod, cod),
+                        c.get('quantidadeEstimadaKg') or 0,
+                        c.get('pesoRealKg') if c.get('pesoRealKg') is not None else '',
+                        c.get('nomeInstituicao') or c.get('nomeSolicitante') or '-',
+                        c.get('nomeCooperativa') or '-',
+                        _STATUS_COLETA_OPCOES.get(st, st),
+                    ])
+                qtd_linhas = len(filtradas)
+
+            slug_per = periodo_cod.lower()
+            nome_arq = f'ecoflux_{tipo_cod.lower()}_{slug_per}.csv'
+            return buf.getvalue().encode('utf-8-sig'), nome_arq, qtd_linhas
 
         with card('Gerar novo relatório'):
             with ui.element('div').classes('form-grid cols-4'):
-                periodo = form_field('Período', options=m.PERIODOS, value=m.PERIODOS[0],
-                                     white=True)
-                instituicao = form_field('Instituição', options=['Todas'] + m.INSTITUICOES,
-                                         value='Todas', white=True)
-                tipo = form_field('Tipo', options=m.TIPOS_RELATORIO,
-                                  value=m.TIPOS_RELATORIO[0], white=True)
+                with ui.element('div'):
+                    h('<label class="form-label">Período</label>')
+                    periodo_sel = ui.select(
+                        opcoes_periodo,
+                        value='TODOS',
+                    ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                instituicao_sel = form_field(
+                    'Instituição',
+                    options=['Todas'] + nomes_inst,
+                    value='Todas',
+                    white=True,
+                )
+
+                with ui.element('div'):
+                    h('<label class="form-label">Tipo</label>')
+                    tipo_sel = ui.select(
+                        tipos_relatorio,
+                        value='OPERACIONAL',
+                    ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
+
+                def _gerar() -> None:
+                    per_cod = str(periodo_sel.value or 'TODOS')
+                    inst_v = str(instituicao_sel.value or 'Todas')
+                    tipo_cod = str(tipo_sel.value or 'OPERACIONAL')
+
+                    conteudo, nome_arq, qtd = _montar_csv(tipo_cod, per_cod, inst_v)
+                    ui.download(conteudo, filename=nome_arq)
+
+                    historico_gerados.insert(0, {
+                        'nome': tipos_relatorio.get(tipo_cod, tipo_cod),
+                        'periodo': opcoes_periodo.get(per_cod, per_cod),
+                        'formato': 'CSV',
+                        'arquivo': nome_arq,
+                        'bytes': conteudo,
+                        'registros': qtd,
+                    })
+                    render_recentes.refresh()
+                    ui.notify(f'Relatório {nome_arq} gerado ({qtd} registro(s)).', type='positive')
+
                 with ui.element('div').classes('cell-end'):
-                    eco_button(
-                        'Gerar relatório',
-                        lambda: ui.notify(
-                            f'Relatório {tipo.value} ({periodo.value} · {instituicao.value}) '
-                            'em geração.', type='positive'),
-                        cls='eco-block')
+                    eco_button('Gerar relatório', _gerar, cls='eco-block')
+
+        # Resumo do mês atual
+        chave_mes_atual = f'{agora.year:04d}-{agora.month:02d}'
+        coletas_mes = [
+            c for c in coletas
+            if str(c.get('dataConclusao') or c.get('dataHoraAgendamento') or c.get('dataCriacao') or '').startswith(chave_mes_atual)
+        ]
+        concluidas_mes = [
+            c for c in coletas_mes
+            if str(c.get('status') or '').upper() in ('CONCLUIDA', 'REALIZADA')
+        ]
+        kg_mes = sum(
+            float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+            for c in concluidas_mes
+        )
+        resumo_mes_real = [
+            ('Coletas concluídas no mês', str(len(concluidas_mes)), True),
+            ('Materiais processados no mês', f'{_formatar_numero_pt(kg_mes)} kg', False),
+            ('Instituições cadastradas', str(len(nomes_inst)), False),
+            ('Coletas pendentes / em rota', str(len(pendentes)), False),
+        ]
 
         with grid('65'):
-            with card('Relatórios recentes'):
-                data_table(m.RELATORIOS_RECENTES, divided=True, tall=True)
-            with card('Resumo do mês'):
+            with card('Relatórios gerados'):
+                @ui.refreshable
+                def render_recentes() -> None:
+                    if not historico_gerados:
+                        h('<div class="muted" style="font-size:13px;padding:10px 0">'
+                          'Nenhum relatório gerado nesta sessão. Use o formulário acima para exportar em CSV.</div>')
+                        return
+
+                    rows = [
+                        (
+                            item['nome'],
+                            item['periodo'],
+                            item['formato'],
+                            m.Badge(f"{item['registros']} reg.", 'green'),
+                        )
+                        for item in historico_gerados
+                    ]
+                    data_table(
+                        m.Table(columns=('Nome', 'Período', 'Formato', 'Registros'), rows=rows),
+                        divided=True,
+                        tall=True,
+                        action='Baixar',
+                        on_action=lambda idx, _r: ui.download(
+                            historico_gerados[idx]['bytes'],
+                            filename=historico_gerados[idx]['arquivo'],
+                        ),
+                    )
+
+                render_recentes()
+
+            with card(f'Resumo do mês ({_MESES_CURTOS[agora.month - 1]}/{agora.year})'):
                 linhas = ''.join(
                     f'<div class="item" style="display:block">'
-                    f'<div class="muted" style="font-size:9px">{escape(label)}</div>'
-                    f'<div style="font-size:16px;{"color:" + PRIMARY if green else ""}">'
+                    f'<div class="muted" style="font-size:11px">{escape(label)}</div>'
+                    f'<div style="font-size:16px;font-weight:600;{"color:" + PRIMARY if green else ""}">'
                     f'{escape(valor)}</div></div>'
-                    for label, valor, green in m.RESUMO_MES
+                    for label, valor, green in resumo_mes_real
                 )
-                h(f'<div class="list-divided">{linhas}</div>'
-                  '<div class="muted" style="font-size:9px;margin-top:10px">'
-                  'Dados prontos para apresentação final do projeto.</div>')
+                h(f'<div class="list-divided">{linhas}</div>')
 
 
 @ui.page('/area-educativa')
 def area_educativa() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    atualizar_sessao_atual()
+    is_admin = eh_administrador()
+
     with layout('/area-educativa'):
-        page_header('Trilhas de educação ambiental',
-                    'Conteúdos para orientar o descarte correto e aumentar a participação')
-        kpi_row(m.KPIS_EDUCATIVA)
+        page_header(
+            'Trilhas de educação ambiental',
+            'Artigos, guia de triagem e boas práticas para descarte correto',
+        )
 
-        with grid('2'):
-            with card('Conteúdos em destaque'):
-                cores = {'green': '#DCFCE7', 'blue': '#DBEAFE', 'amber': '#FEF3C7'}
-                linhas = ''.join(
-                    f'<div class="content-row">'
-                    f'<span class="thumb" style="background:{cores[tone]}"></span>'
-                    f'<div style="flex:1;min-width:0">'
-                    f'<div class="item-title">{escape(titulo)}</div>'
-                    f'<div class="item-meta" style="font-size:7px">{escape(desc)}</div></div>'
-                    f'<div class="track" style="max-width:110px">'
-                    f'<div class="fill" style="width:{pct}%"></div></div>'
-                    f'<span style="font-size:9px;width:26px;text-align:right">{pct}%</span></div>'
-                    for tone, titulo, desc, pct in m.CONTEUDOS_DESTAQUE
+        dialog_leitura = ui.dialog()
+        dialog_novo = ui.dialog()
+
+        def _abrir_artigo(artigo_resumo: dict[str, Any]) -> None:
+            slug = str(artigo_resumo.get('slug') or '').strip()
+            artigo = artigo_resumo
+            if slug:
+                try:
+                    artigo = buscar_artigo_por_slug(slug)
+                except ApiError:
+                    artigo = artigo_resumo
+
+            dialog_leitura.clear()
+            with dialog_leitura, ui.card().style('width:680px;max-width:95vw;max-height:85vh;overflow:auto;border-radius:16px;padding:22px'):
+                titulo = str(artigo.get('titulo') or 'Artigo')
+                cat = str(artigo.get('categoria') or 'Geral')
+                tempo = int(artigo.get('tempoLeituraMinutos') or 1)
+                mat_rel = str(artigo.get('materialRelacionado') or '').strip()
+                resumo = str(artigo.get('resumo') or '')
+                corpo = str(artigo.get('corpoTexto') or '')
+                impacto = str(artigo.get('impactoDestaque') or '').strip()
+                boas = artigo.get('boasPraticas') or []
+                evitar = artigo.get('oQueEvitar') or []
+
+                meta_txt = f'{cat} • {tempo} min de leitura' + (f' • Material: {mat_rel}' if mat_rel else '')
+                h(
+                    f'<div class="badge b-green" style="margin-bottom:8px">{escape(meta_txt)}</div>'
+                    f'<div class="card-title" style="font-size:18px;margin-bottom:6px">{escape(titulo)}</div>'
+                    f'<div class="muted" style="font-size:13px;margin-bottom:14px">{escape(resumo)}</div>'
+                    f'<div style="font-size:13px;line-height:1.6;white-space:pre-line;margin-bottom:14px">{escape(corpo)}</div>'
                 )
-                h(linhas)
 
-            with card('Quiz EcoScore'):
-                h('<div class="muted" style="font-size:10px;margin:-8px 0 12px">'
-                  'Teste seus conhecimentos e ganhe pontos por boas práticas.</div>'
-                  f'<div class="quiz-box">{escape(m.QUIZ_PERGUNTA)}</div>')
-                with ui.element('div').classes('chips').style('margin-top:14px'):
-                    botoes: list[ui.button] = []
+                if impacto:
+                    h(
+                        f'<div style="padding:10px 14px;border-radius:10px;background:#ECFDF5;'
+                        f'border:1px solid #A7F3D0;color:{PRIMARY};font-size:12px;font-weight:600;margin-bottom:14px">'
+                        f'Impacto: {escape(impacto)}</div>'
+                    )
 
-                    def responder(opcao: str, botao: ui.button) -> None:
-                        for outro in botoes:
-                            outro.classes(remove='on')
-                        botao.classes(add='on')
-                        certo = opcao == m.QUIZ_CORRETA
-                        ui.notify('Correto! +20 pontos EcoScore.' if certo
-                                  else 'Não é esse. Tente outra opção.',
-                                  type='positive' if certo else 'warning')
+                if isinstance(boas, list) and boas:
+                    itens_b = ''.join(f'<li style="margin-bottom:4px">{escape(str(x))}</li>' for x in boas)
+                    h(f'<div style="font-size:12px;font-weight:600;color:{PRIMARY};margin-bottom:4px">Boas práticas</div>'
+                      f'<ul style="margin:0 0 12px 18px;font-size:12px">{itens_b}</ul>')
 
-                    for opcao in m.QUIZ_OPCOES:
-                        botao = eco_button(
-                            opcao, cls=f'outline{" on" if opcao == m.QUIZ_CORRETA else ""}')
-                        botao.on_click(lambda o=opcao, b=botao: responder(o, b))
-                        botoes.append(botao)
+                if isinstance(evitar, list) and evitar:
+                    itens_e = ''.join(f'<li style="margin-bottom:4px">{escape(str(x))}</li>' for x in evitar)
+                    h(f'<div style="font-size:12px;font-weight:600;color:#B91C1C;margin-bottom:4px">O que evitar</div>'
+                      f'<ul style="margin:0 0 12px 18px;font-size:12px">{itens_e}</ul>')
 
-        with grid('3'):
-            with card('Campanhas ativas', cls='card-sm'):
-                item_list(m.CAMPANHAS_ATIVAS)
-            with card('Materiais para baixar', cls='card-sm'):
-                item_list(m.MATERIAIS_DOWNLOAD)
-            with card('Trilha recomendada', cls='card-sm'):
-                numbered_steps(m.TRILHA_RECOMENDADA)
+                with ui.row().classes('justify-end'):
+                    eco_button('Fechar', dialog_leitura.close, cls='outline')
+
+            dialog_leitura.open()
+
+        def _abrir_modal_novo_artigo() -> None:
+            dialog_novo.clear()
+            with dialog_novo, ui.card().style('width:560px;max-width:95vw;max-height:85vh;overflow:auto;border-radius:16px;padding:22px'):
+                h('<div class="card-title" style="margin-bottom:10px">Publicar novo artigo educativo</div>')
+                with ui.element('div').classes('form-grid'):
+                    slug_in = form_field('Slug (URL única)', placeholder='ex: separacao-plastico')
+                    cat_in = form_field('Categoria', placeholder='ex: Reciclagem')
+                    titulo_in = form_field('Título', placeholder='ex: Como separar plásticos corretamente')
+                    resumo_in = form_field('Resumo', placeholder='Resumo curto do conteúdo')
+                    corpo_in = form_field('Conteúdo completo', placeholder='Texto completo do artigo', props='type=textarea autogrow')
+                    tempo_in = form_field('Tempo de leitura (min)', value='3', props='type=number min=1')
+                    mat_in = form_field('Material relacionado (opcional)', placeholder='ex: PLASTICO')
+                    boas_in = form_field('Boas práticas (separe por ;)', placeholder='Lavar embalagens; Retirar tampas')
+                    evitar_in = form_field('O que evitar (separe por ;)', placeholder='Misturar com orgânicos')
+                    impacto_in = form_field('Impacto em destaque (opcional)', placeholder='ex: Reduz até 70% do volume em aterros')
+
+                    def _salvar_artigo() -> None:
+                        if not _obrigatorios(slug=slug_in, categoria=cat_in, titulo=titulo_in, resumo=resumo_in, corpo=corpo_in):
+                            return
+                        boas_list = [x.strip() for x in str(boas_in.value or '').split(';') if x.strip()]
+                        evitar_list = [x.strip() for x in str(evitar_in.value or '').split(';') if x.strip()]
+                        payload = {
+                            'slug': str(slug_in.value).strip().lower(),
+                            'categoria': str(cat_in.value).strip(),
+                            'titulo': str(titulo_in.value).strip(),
+                            'resumo': str(resumo_in.value).strip(),
+                            'corpoTexto': str(corpo_in.value).strip(),
+                            'tempoLeituraMinutos': max(1, int(float(tempo_in.value or 1))),
+                            'materialRelacionado': str(mat_in.value or '').strip() or None,
+                            'boasPraticas': boas_list,
+                            'oQueEvitar': evitar_list,
+                            'impactoDestaque': str(impacto_in.value or '').strip() or None,
+                        }
+                        try:
+                            criar_artigo_educativo(payload)
+                            ui.notify('Artigo publicado com sucesso!', type='positive')
+                            dialog_novo.close()
+                            painel_educativo.refresh()
+                        except ApiError as exc:
+                            ui.notify(exc.message, type='negative')
+
+                    with ui.row().classes('justify-end gap-2').style('margin-top:10px'):
+                        eco_button('Cancelar', dialog_novo.close, cls='outline')
+                        eco_button('Publicar', _salvar_artigo, cls='dark')
+
+            dialog_novo.open()
+
+        @ui.refreshable
+        def painel_educativo() -> None:
+            artigos: list[dict[str, Any]] = []
+            guia_triagem: list[dict[str, Any]] = []
+            try:
+                artigos = listar_artigos_educativos()
+            except ApiError as exc:
+                ui.notify(exc.message, type='warning')
+            try:
+                guia_triagem = listar_guia_triagem()
+            except ApiError:
+                guia_triagem = []
+
+            artigos_ativos = [a for a in artigos if a.get('ativo', True) is not False]
+            categorias = sorted({
+                str(a.get('categoria') or '').strip()
+                for a in artigos_ativos
+                if str(a.get('categoria') or '').strip()
+            })
+            tempo_medio = (
+                int(round(sum(int(a.get('tempoLeituraMinutos') or 1) for a in artigos_ativos) / len(artigos_ativos)))
+                if artigos_ativos
+                else 0
+            )
+
+            kpis_reais = [
+                replace(m.KPIS_EDUCATIVA[0], label='ARTIGOS PUBLICADOS', value=str(len(artigos_ativos)), hint='disponíveis na trilha'),
+                replace(m.KPIS_EDUCATIVA[1], label='CATEGORIAS', value=str(len(categorias)), hint='temas abordados'),
+                replace(m.KPIS_EDUCATIVA[2], label='GUIA DE TRIAGEM', value=str(len(guia_triagem)), hint='materiais orientados'),
+                replace(m.KPIS_EDUCATIVA[3], label='LEITURA MÉDIA', value=f'{tempo_medio} min', hint='por artigo'),
+            ]
+            kpi_row(kpis_reais)
+
+            with grid('2'):
+                with card('Artigos educativos'):
+                    with ui.row().classes('w-full items-end justify-between gap-2').style('margin-bottom:12px'):
+                        cat_filtro = ui.select(
+                            {'': 'Todas as categorias', **{c: c for c in categorias}},
+                            value='',
+                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field').style('max-width:240px')
+                        if is_admin:
+                            eco_button('+ Novo artigo', _abrir_modal_novo_artigo, cls='dark')
+
+                    @ui.refreshable
+                    def render_artigos() -> None:
+                        cat_sel = str(cat_filtro.value or '')
+                        filtrados = [
+                            a for a in artigos_ativos
+                            if not cat_sel or str(a.get('categoria') or '').strip() == cat_sel
+                        ]
+                        if not filtrados:
+                            h('<div class="muted" style="font-size:13px;padding:8px 0">'
+                              'Nenhum artigo educativo encontrado.</div>')
+                            return
+
+                        rows = [
+                            (
+                                str(a.get('titulo') or '-'),
+                                str(a.get('categoria') or 'Geral'),
+                                f"{int(a.get('tempoLeituraMinutos') or 1)} min",
+                            )
+                            for a in filtrados
+                        ]
+                        data_table(
+                            m.Table(columns=('Título', 'Categoria', 'Leitura'), rows=rows),
+                            divided=True,
+                            action='Ler',
+                            on_action=lambda idx, _r, lista=filtrados: _abrir_artigo(lista[idx]),
+                        )
+
+                    cat_filtro.on_value_change(lambda _: render_artigos.refresh())
+                    render_artigos()
+
+                with card('Quiz ambiental'):
+                    h('<div class="muted" style="font-size:11px;margin:-6px 0 12px">'
+                      'Teste seus conhecimentos sobre descarte correto.</div>'
+                      f'<div class="quiz-box">{escape(m.QUIZ_PERGUNTA)}</div>')
+                    with ui.element('div').classes('chips').style('margin-top:14px'):
+                        botoes: list[ui.button] = []
+
+                        def responder(opcao: str, botao: ui.button) -> None:
+                            for outro in botoes:
+                                outro.classes(remove='on')
+                            botao.classes(add='on')
+                            certo = opcao == m.QUIZ_CORRETA
+                            ui.notify(
+                                'Correto! Óleo de cozinha deve ser armazenado em garrafa PET e entregue em ponto de coleta.'
+                                if certo
+                                else 'Não é esse. Tente outra opção.',
+                                type='positive' if certo else 'warning',
+                            )
+
+                        for opcao in m.QUIZ_OPCOES:
+                            botao = eco_button(opcao, cls='outline')
+                            botao.on_click(lambda o=opcao, b=botao: responder(o, b))
+                            botoes.append(botao)
+
+            with card('Guia rápido de triagem'):
+                if not guia_triagem:
+                    h('<div class="muted" style="font-size:13px;padding:8px 0">'
+                      'Nenhum item cadastrado no guia de triagem até o momento.</div>')
+                else:
+                    rows_guia: list[tuple] = []
+                    for g in guia_triagem:
+                        nome_m = str(g.get('nomeMaterial') or g.get('material') or g.get('nome') or g.get('codigoMaterial') or '-')
+                        cor_l = str(g.get('corLixeira') or g.get('cor') or '-')
+                        reciclavel = g.get('podeReciclar') or g.get('exemplosReciclaveis') or g.get('dica') or g.get('descricao') or '-'
+                        if isinstance(reciclavel, list):
+                            reciclavel = ', '.join(str(x) for x in reciclavel)
+                        evitar_g = g.get('naoReciclar') or g.get('oQueEvitar') or '-'
+                        if isinstance(evitar_g, list):
+                            evitar_g = ', '.join(str(x) for x in evitar_g)
+                        rows_guia.append((nome_m, cor_l, str(reciclavel), str(evitar_g)))
+
+                    data_table(
+                        m.Table(columns=('Material', 'Lixeira', 'Como descartar', 'Evitar'), rows=rows_guia),
+                        divided=True,
+                    )
+
+        painel_educativo()
 
 
 @ui.page('/administracao')

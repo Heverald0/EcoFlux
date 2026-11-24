@@ -18,6 +18,9 @@ from api_client import (
     limpar_sessao,
     obter_nome_atual,
     obter_perfil_atual,
+    ApiError, 
+    buscar_meu_ecoscore, 
+    obter_token
 )
 import mocks as m
 
@@ -670,6 +673,22 @@ def layout(route: str):
     ui.page_title(f'EcoFlux | {TITLES[route]}')
     ui.add_head_html(STYLES, shared=True)
 
+    pontos_topo = 0
+    if obter_token():
+        try:
+            score_topo = buscar_meu_ecoscore()
+            pontos_topo = int(round(float(
+                score_topo.get('pontuacaoTotal')
+                or score_topo.get('pontuacao')
+                or score_topo.get('pontos')
+                or score_topo.get('score')
+                or 0
+            )))
+        except ApiError:
+            pontos_topo = 0
+
+    score_texto = f'EcoScore: {pontos_topo:,} pontos'.replace(',', '.')
+
     with ui.element('div').classes('eco-app'):
         h(sidebar_html(route))
         with ui.element('div').classes('main'):
@@ -681,7 +700,7 @@ def layout(route: str):
                         <span>{TITLES[route]}</span>
                       </div>''')
                 with ui.element('div').classes('topbar-right'):
-                    h(f'<span class="score-badge">{m.USER_SCORE}</span>')
+                    h(f'<span class="score-badge">{escape(score_texto)}</span>')
                     with ui.element('button').classes('avatar avatar-btn').props(
                         'aria-label="Conta e permissões"'
                     ):
@@ -697,7 +716,6 @@ def layout(route: str):
                             ui.menu_item('Sair', _sair_para_inicio)
             with ui.element('main').classes('content') as content:
                 yield content
-
 
 def page_header(title: str, subtitle: str) -> None:
     h(f'<div><h1 class="page-title">{escape(title)}</h1>'

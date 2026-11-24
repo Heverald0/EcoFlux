@@ -1144,3 +1144,85 @@ def concluir_entrega_motorista(coleta_id: int, payload: dict[str, Any]) -> dict[
         )
 
     return resp.json()
+
+def listar_artigos_educativos(categoria: str | None = None) -> list[dict[str, Any]]:
+    """GET /api/v1/educativo/artigos"""
+    params = {'categoria': categoria} if categoria else None
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/educativo/artigos',
+                params=params,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar artigos educativos (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def buscar_artigo_por_slug(slug: str) -> dict[str, Any]:
+    """GET /api/v1/educativo/artigos/{slug}"""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                f'/api/v1/educativo/artigos/{slug}',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao buscar artigo "{slug}" (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
+
+
+def listar_guia_triagem() -> list[dict[str, Any]]:
+    """GET /api/v1/educativo/guia-triagem"""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.get(
+                '/api/v1/educativo/guia-triagem',
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code != 200:
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao listar guia de triagem (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+    dados = resp.json()
+    return dados if isinstance(dados, list) else []
+
+
+def criar_artigo_educativo(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /api/v1/educativo/artigos"""
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
+            resp = client.post(
+                '/api/v1/educativo/artigos',
+                json=payload,
+                headers=_auth_headers_obrigatorio(),
+            )
+    except httpx.RequestError as exc:
+        raise ApiError(f'Falha de conexão com o back-end em {API_BASE_URL}.') from exc
+
+    if resp.status_code not in (200, 201):
+        raise ApiError(
+            _extrair_erro(resp, f'Erro ao criar artigo (HTTP {resp.status_code}).'),
+            status_code=resp.status_code,
+        )
+    dados = resp.json()
+    return dados if isinstance(dados, dict) else {}
