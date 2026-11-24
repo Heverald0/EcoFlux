@@ -450,104 +450,209 @@ def _censurar_nome_ranking(nome: str, nome_usuario_atual: str) -> str:
     return f'{inicio}{meio}{fim}'
 
 
-def _montar_dados_dashboard() -> tuple[list[m.Kpi], m.Table]:
-    """Busca dados reais disponiveis na API para KPIs e solicitacoes recentes."""
+def _montar_dados_dashboard() -> dict[str, Any]:
+    """Busca dados reais disponiveis na API para todos os blocos do Dashboard."""
     coletas: list[dict[str, Any]] = []
     pontos: list[dict[str, Any]] = []
     instituicoes: list[dict[str, Any]] = []
 
-    tem_coletas = False
-    tem_pontos = False
-    tem_instituicoes = False
-
     try:
-        coletas = listar_minhas_coletas()
-        tem_coletas = True
+        coletas = listar_coletas_operacional()
     except ApiError:
-        coletas = []
+        try:
+            coletas = listar_minhas_coletas()
+        except ApiError:
+            coletas = []
 
     try:
         pontos = listar_pontos_coleta()
-        tem_pontos = True
     except ApiError:
         pontos = []
 
     try:
-        instituicoes = listar_minhas_instituicoes()
-        tem_instituicoes = True
+        instituicoes = listar_instituicoes() + listar_cooperativas()
     except ApiError:
-        instituicoes = []
+        try:
+            instituicoes = listar_minhas_instituicoes()
+        except ApiError:
+            instituicoes = []
 
-    kpis_base = list(m.KPIS_DASHBOARD)
+    realizadas = [
+        c for c in coletas
+        if str(c.get('status') or '').strip().upper() in ('REALIZADA', 'CONCLUIDA')
+    ]
+    pendentes = [
+        c for c in coletas
+        if str(c.get('status') or '').strip().upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA', 'EM_ANDAMENTO')
+    ]
+    total_kg = sum(
+        float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+        for c in realizadas
+    )
+    pontos_ativos = [
+        p for p in pontos
+        if str(p.get('status') or 'ATIVO').strip().upper() == 'ATIVO'
+    ]
 
-    if tem_coletas and len(kpis_base) >= 2:
-        realizadas = [
-            c for c in coletas
-            if str(c.get('status') or '').strip().upper() in ('REALIZADA', 'CONCLUIDA')
-        ]
-        total_kg = sum(
-            float(c.get('quantidadeEstimadaKg') or 0) for c in realizadas
-        )
-        kpis_base[0] = _atualizar_kpi(
-            kpis_base[0],
-            'TOTAL RECICLADO (KG)',
-            _formatar_numero_pt(total_kg),
-        )
-        kpis_base[1] = _atualizar_kpi(
-            kpis_base[1],
-            'COLETAS REALIZADAS',
-            f'{len(realizadas):02d}' if len(realizadas) < 10 else str(len(realizadas)),
-        )
+    kpis_out = [
+        replace(
+            m.KPIS_DASHBOARD[0],
+            label='TOTAL RECICLADO (KG)',
+            value=_formatar_numero_pt(total_kg),
+            hint=f'{len(realizadas)} coleta{"s" if len(realizadas) != 1 else ""} concluída{"s" if len(realizadas) != 1 else ""}',
+        ),
+        replace(
+            m.KPIS_DASHBOARD[1],
+            label='COLETAS REALIZADAS',
+            value=f'{len(realizadas):02d}' if len(realizadas) < 10 else str(len(realizadas)),
+            hint=f'{len(pendentes)} em andamento' if pendentes else 'nenhuma pendente',
+        ),
+        replace(
+            m.KPIS_DASHBOARD[2],
+            label='PONTOS ATIVOS',
+            value=f'{len(pontos_ativos):02d}' if len(pontos_ativos) < 10 else str(len(pontos_ativos)),
+            hint=f'de {len(pontos)} cadastrados' if pontos else 'nenhum ponto cadastrado',
+        ),
+        replace(
+            m.KPIS_DASHBOARD[3],
+            label='INSTITUIÇÕES',
+            value=f'{len(instituicoes):02d}' if len(instituicoes) < 10 else str(len(instituicoes)),
+            hint='cooperativas, condomínios e empresas',
+        ),
+    ]
 
-    if tem_pontos and len(kpis_base) >= 3:
-        ativos = [
-            p for p in pontos if str(p.get('status') or 'ATIVO').strip().upper() == 'ATIVO'
-        ]
-        kpis_base[2] = _atualizar_kpi(
-            kpis_base[2],
-            'PONTOS ATIVOS',
-            f'{len(ativos):02d}' if len(ativos) < 10 else str(len(ativos)),
-        )
+    mapa_inst = {
+        int(i['id']): str(i.get('nome') or f"Instituição #{i['id']}")
+        for i in instituicoes
+        if i.get('id') is not None
+    }
 
-    if tem_instituicoes and len(kpis_base) >= 4:
-        kpis_base[3] = _atualizar_kpi(
-            kpis_base[3],
-            'INSTITUIÇÕES',
-            f'{len(instituicoes):02d}' if len(instituicoes) < 10 else str(len(instituicoes)),
-        )
+    tone_status = {
+        'CONCLUIDA': 'green',
+        'REALIZADA': 'green',
+        'EM_ROTA': 'blue',
+        'EM_ANDAMENTO': 'blue',
+        'AGENDADA': 'amber',
+        'ENVIADA': 'amber',
+        'CANCELADA': 'gray',
+    }
 
-    if tem_coletas and coletas:
-        mapa_inst = {
-            int(i['id']): str(i.get('nome') or f"Instituição #{i['id']}")
-            for i in instituicoes
-            if i.get('id') is not None
-        }
-        recentes_rows: list[tuple] = []
-        for c in list(reversed(coletas))[:5]:
-            nome_inst_resp = str(c.get('nomeInstituicao') or '').strip()
-            inst_id = c.get('idInstituicao') if c.get('idInstituicao') is not None else c.get('instituicaoId')
-            origem = (
-                nome_inst_resp
-                or (
-                    mapa_inst.get(int(inst_id))
-                    if inst_id is not None and int(inst_id) in mapa_inst
-                    else (str(c.get('bairro') or '').strip() or 'Solicitação própria')
-                )
+    # Solicitações recentes (últimas 5)
+    recentes_rows: list[tuple] = []
+    coletas_recentes = sorted(coletas, key=lambda c: int(c.get('id') or 0), reverse=True)
+    for c in coletas_recentes[:5]:
+        nome_inst_resp = str(c.get('nomeInstituicao') or '').strip()
+        inst_id = c.get('idInstituicao') if c.get('idInstituicao') is not None else c.get('instituicaoId')
+        origem = (
+            nome_inst_resp
+            or (mapa_inst.get(int(inst_id)) if inst_id is not None and int(inst_id) in mapa_inst else None)
+            or str(c.get('nomeSolicitante') or '').strip()
+            or str(c.get('bairro') or '').strip()
+            or 'Solicitação própria'
+        )
+        mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
+        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+        st_raw = str(c.get('status') or 'ENVIADA').upper()
+        st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
+        recentes_rows.append((origem, mat_lbl, m.Badge(st_lbl, tone_status.get(st_raw, 'gray'))))
+
+    # Últimos 5 meses + ranking de instituições + tipos de material
+    janela_5_meses = _ultimos_5_meses_base_atual()
+    por_mes: dict[tuple[int, int], float] = {chave: 0.0 for chave in janela_5_meses}
+    por_inst: dict[str, float] = {}
+    por_mat: dict[str, float] = {}
+    tem_meses_reais = False
+
+    for c in coletas:
+        st = str(c.get('status') or '').upper()
+        if st == 'CANCELADA':
+            continue
+        kg = float(c.get('pesoRealKg') or c.get('quantidadeEstimadaKg') or 0)
+        if kg <= 0:
+            continue
+
+        data_ref = str(c.get('dataConclusao') or c.get('dataHoraAgendamento') or c.get('dataCriacao') or '')
+        if len(data_ref) >= 7:
+            try:
+                dt = datetime.fromisoformat(data_ref.replace('Z', ''))
+                chave = (dt.year, dt.month)
+                if chave in por_mes:
+                    por_mes[chave] += kg
+                    tem_meses_reais = True
+            except ValueError:
+                pass
+
+        nome_inst_resp = str(c.get('nomeInstituicao') or '').strip()
+        inst_id = c.get('idInstituicao') if c.get('idInstituicao') is not None else c.get('instituicaoId')
+        origem = (
+            nome_inst_resp
+            or (mapa_inst.get(int(inst_id)) if inst_id is not None and int(inst_id) in mapa_inst else None)
+            or str(c.get('bairro') or '').strip()
+            or 'Solicitação avulsa'
+        )
+        por_inst[origem] = por_inst.get(origem, 0.0) + kg
+
+        mat_raw = str(c.get('tipoMaterial') or 'OUTRO').upper()
+        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+        por_mat[mat_lbl] = por_mat.get(mat_lbl, 0.0) + kg
+
+    max_mes = max(por_mes.values(), default=0.0)
+    meses_out = [
+        m.Bar(
+            label=_MESES_CURTOS[mes - 1],
+            pct=int(round((por_mes[(ano, mes)] / max_mes) * 100)) if max_mes > 0 else 0,
+        )
+        for ano, mes in janela_5_meses
+    ]
+
+    top_inst = sorted(por_inst.items(), key=lambda x: x[1], reverse=True)[:4]
+    max_inst = max((v for _, v in top_inst), default=0.0)
+    ranking_inst_out = [
+        m.Metric(
+            label=nome,
+            value=f'{_formatar_numero_pt(kg)} kg',
+            pct=max(10, int(round((kg / max_inst) * 100))) if max_inst > 0 else 0,
+        )
+        for nome, kg in top_inst
+    ]
+
+    top_mat = sorted(por_mat.items(), key=lambda x: x[1], reverse=True)[:5]
+    max_mat = max((v for _, v in top_mat), default=0.0)
+    tipos_mat_out = [
+        m.Metric(
+            label=nome,
+            value=f'{_formatar_numero_pt(kg)} kg',
+            pct=max(10, int(round((kg / max_mat) * 100))) if max_mat > 0 else 0,
+        )
+        for nome, kg in top_mat
+    ]
+
+    # Atividades / notificações recentes a partir das últimas coletas
+    notificacoes_out: list[m.Item] = []
+    for c in coletas_recentes[:4]:
+        st_raw = str(c.get('status') or 'ENVIADA').upper()
+        st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.capitalize())
+        mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
+        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+        data_fmt = _formatar_data_curta(str(c.get('dataHoraAgendamento') or c.get('dataCriacao') or ''))
+        local = str(c.get('nomeInstituicao') or c.get('bairro') or 'Coleta')
+        notificacoes_out.append(
+            m.Item(
+                title=f'Coleta #{c.get("id") or "-"} ({mat_lbl}) • {st_lbl}',
+                meta=f'{data_fmt} • {local}',
+                tone=tone_status.get(st_raw, 'gray'),
             )
-            mat_raw = str(c.get('tipoMaterial') or 'PAPEL').upper()
-            mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
-            st_raw = str(c.get('status') or 'ENVIADA').upper()
-            st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw.replace('_', ' ').capitalize())
-            recentes_rows.append((origem, mat_lbl, m.Badge(st_lbl)))
-
-        tabela_recentes = m.Table(
-            columns=('Instituição', 'Material', 'Status'),
-            rows=recentes_rows,
         )
-    else:
-        tabela_recentes = m.SOLICITACOES_RECENTES
 
-    return kpis_base, tabela_recentes
+    return {
+        'kpis': kpis_out,
+        'recentes_rows': recentes_rows,
+        'meses': meses_out,
+        'tem_meses_reais': tem_meses_reais,
+        'ranking_inst': ranking_inst_out,
+        'notificacoes': notificacoes_out,
+        'tipos_material': tipos_mat_out,
+    }
 
 
 def _fmt_qtd_admin(qtd: int) -> str:
@@ -1074,25 +1179,59 @@ def _carregar_materiais_catalogo_api() -> list[dict[str, Any]]:
 
 @ui.page('/dashboard')
 def dashboard() -> None:
+    if not obter_token():
+        ui.navigate.to('/')
+        return
+
+    agora = datetime.now()
+    periodo_titulo = f'{_MESES_CURTOS[agora.month - 1]} {agora.year}'
+
     with layout('/dashboard'):
-        page_header('Visão Geral', 'Resumo das atividades de reciclagem - Abril 2026')
-        kpis_dashboard, tabela_recentes = _montar_dados_dashboard()
-        kpi_row(kpis_dashboard)
+        page_header('Visão Geral', f'Resumo das atividades de reciclagem - {periodo_titulo}')
+        dados_dash = _montar_dados_dashboard()
+        kpi_row(dados_dash['kpis'])
 
         with grid('2'):
             with card('Materiais coletados - 05 meses'):
-                bar_chart(m.MESES_5)
-            with card('Solicitações recentes', more='Ver mais'):
-                data_table(tabela_recentes)
+                if dados_dash['tem_meses_reais']:
+                    bar_chart(dados_dash['meses'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma coleta com peso registrado nos últimos 5 meses até o momento.</div>')
+
+            with card('Solicitações recentes'):
+                if dados_dash['recentes_rows']:
+                    data_table(
+                        m.Table(
+                            columns=('Instituição', 'Material', 'Status'),
+                            rows=dados_dash['recentes_rows'],
+                        )
+                    )
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma solicitação de coleta registrada até o momento.</div>')
 
         with grid('3'):
             with card('Ranking de instituições', cls='card-sm'):
-                rank_list(m.RANKING_DASHBOARD)
-            with card('Notificações', cls='card-sm'):
-                item_list(m.NOTIFICACOES)
-            with card('Tipos de material', cls='card-sm'):
-                metric_list(m.TIPOS_MATERIAL)
+                if dados_dash['ranking_inst']:
+                    rank_list(dados_dash['ranking_inst'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Sem volume registrado por instituição ainda.</div>')
 
+            with card('Atividades recentes', cls='card-sm'):
+                if dados_dash['notificacoes']:
+                    item_list(dados_dash['notificacoes'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhuma atividade recente registrada.</div>')
+
+            with card('Tipos de material', cls='card-sm'):
+                if dados_dash['tipos_material']:
+                    metric_list(dados_dash['tipos_material'])
+                else:
+                    h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                      'Nenhum material registrado ainda.</div>')
 
 @ui.page('/pontos-de-coleta')
 def pontos_de_coleta() -> None:
