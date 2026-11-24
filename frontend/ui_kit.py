@@ -295,21 +295,93 @@ STYLES = '''
   .b-gray { color: #374151; background: #E5E7EB; }
   .b-gold { color: #1A1A1A; background: #FBBF24; }
 
-  /* --- barras / graficos --- */
-  .track { overflow: hidden; height: 6px; flex: 1; border-radius: 999px; background: var(--track); }
-  .fill { height: 100%; border-radius: 999px; background: var(--primary); }
-  .fill.light { background: var(--primary-light); }
-  .chart { display: flex; height: 150px; align-items: flex-end; gap: 10px; }
-  .chart > div { flex: 1; background: var(--primary); }
-  .chart > div.light { background: var(--primary-light); }
-  .chart-x { display: flex; gap: 10px; margin-top: 8px; }
-  .chart-x > span { flex: 1; font-size: 11px; text-align: center; }
-  .donut { position: relative; flex: 0 0 auto; border-radius: 50%; }
-  .donut-hole { position: absolute; border-radius: 50%; background: var(--surface); }
-  .legend { display: flex; flex: 1; flex-direction: column; gap: 10px; font-size: 11px; }
-  .legend-row { display: flex; align-items: center; gap: 8px; }
-  .legend-chip { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 3px; }
-  .legend-row span:nth-child(2) { flex: 1; }
+ /* --- barras / graficos --- */
+.track { overflow: hidden; height: 6px; flex: 1; border-radius: 999px; background: var(--track); }
+.fill { height: 100%; border-radius: 999px; background: var(--primary); }
+.fill.light { background: var(--primary-light); }
+
+.chart-wrapper {
+    display: flex;
+    height: 230px;
+    gap: 10px;
+}
+
+.chart-y {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding-bottom: 25px;
+    min-width: 38px;
+    text-align: right;
+    font-size: 11px;
+    color: #888;
+}
+
+.chart-area {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+}
+
+.chart-grid {
+    position: absolute;
+    inset: 0 0 25px 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.chart-grid div {
+    border-top: 1px solid #e5e7eb;
+}
+
+.chart {
+    position: absolute;
+    inset: 0 0 25px 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-around;
+    gap: 12px;
+}
+
+.bar-column {
+    height: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    position: relative;
+}
+
+.bar-column > div {
+    width: 100%;
+    max-width: 60px;
+    background: var(--primary);
+    border-radius: 4px 4px 0 0;
+    z-index: 1;
+}
+
+.bar-column > div.light {
+    background: var(--primary-light);
+}
+
+.bar-value {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+
+.chart-x {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    display: flex;
+    justify-content: space-around;
+    font-size: 11px;
+    color: #777;
+}
 
   /* --- listas --- */
   .rank-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
@@ -816,12 +888,63 @@ def data_table(
 
 def bar_chart(bars: Iterable[m.Bar]) -> None:
     bars = list(bars)
+
+    if not bars:
+        return
+
+    max_value = max(bar.value for bar in bars)
+    max_value = max(max_value, 1)
+
+    # Escala com 4 intervalos
+    step = max_value / 4
+    escala = [step * i for i in range(5)]
+
+    def formatar_tick(valor: float) -> str:
+        if valor.is_integer():
+            texto = f'{valor:,.0f}'
+        else:
+            texto = f'{valor:,.2f}'.rstrip('0').rstrip('.')
+
+        return texto.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+    ticks_y = ''.join(
+        f'<span>{formatar_tick(valor)}</span>'
+        for valor in reversed(escala)
+    )
+
     cols = ''.join(
-        f'<div class="{"light" if i % 2 else ""}" style="height:{bar.pct}%"></div>'
+        f'''
+        <div class="bar-column">
+            <span class="bar-value">
+                {escape(f'{bar.value:,.0f}'.replace(',', '.'))}
+            </span>
+            <div class="{"light" if i % 2 else ""}"
+                 style="height:{bar.pct}%">
+            </div>
+        </div>
+        '''
         for i, bar in enumerate(bars)
     )
-    ticks = ''.join(f'<span>{escape(bar.label)}</span>' for bar in bars)
-    h(f'<div><div class="chart">{cols}</div><div class="chart-x">{ticks}</div></div>')
+
+    ticks_x = ''.join(
+        f'<span>{escape(bar.label)}</span>'
+        for bar in bars
+    )
+
+    h(f'''
+        <div class="chart-wrapper">
+            <div class="chart-y">{ticks_y}</div>
+
+            <div class="chart-area">
+                <div class="chart-grid">
+                    {"".join("<div></div>" for _ in range(5))}
+                </div>
+
+                <div class="chart">{cols}</div>
+                <div class="chart-x">{ticks_x}</div>
+            </div>
+        </div>
+    ''')
 
 
 def donut(slices: Iterable[m.Slice], size: int = 110, thickness: int = 16) -> str:

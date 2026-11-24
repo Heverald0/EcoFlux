@@ -35,9 +35,10 @@ class Table:
 
 @dataclass(frozen=True)
 class Bar:
-    """Barra do grafico mensal (altura em % da area do grafico)."""
+    """Barra do grafico mensal."""
     label: str
     pct: int
+    value: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -613,12 +613,13 @@ def _montar_dados_dashboard() -> dict[str, Any]:
 
     max_mes = max(por_mes.values(), default=0.0)
     meses_out = [
-        m.Bar(
-            label=_MESES_CURTOS[mes - 1],
-            pct=int(round((por_mes[(ano, mes)] / max_mes) * 100)) if max_mes > 0 else 0,
-        )
-        for ano, mes in janela_5_meses
-    ]
+    m.Bar(
+        label=_MESES_CURTOS[mes - 1],
+        pct=int(round((por_mes[(ano, mes)] / max_mes) * 100)) if max_mes > 0 else 0,
+        value=por_mes[(ano, mes)],
+    )
+    for ano, mes in janela_5_meses
+]
 
     top_inst = sorted(por_inst.items(), key=lambda x: x[1], reverse=True)[:4]
     max_inst = max((v for _, v in top_inst), default=0.0)
@@ -938,12 +939,13 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
 
     max_kg_mes = max(por_mes.values(), default=0.0)
     meses_out = [
-        m.Bar(
-            label=_MESES_CURTOS[mes - 1],
-            pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
-        )
-        for ano, mes in janela_5_meses
-    ]
+    m.Bar(
+        label=_MESES_CURTOS[mes - 1],
+        pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
+        value=por_mes[(ano, mes)],
+    )
+    for ano, mes in janela_5_meses
+]
 
     if por_inst:
         top_inst = sorted(por_inst.items(), key=lambda x: x[1], reverse=True)[:4]
@@ -1149,11 +1151,12 @@ def _montar_dados_ecoscore() -> dict[str, Any]:
 
     max_kg_mes = max(por_mes.values(), default=0.0)
     meses_out = [
-        m.Bar(
-            label=_MESES_CURTOS[mes - 1],
-            pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
-        )
-        for ano, mes in janela_5_meses
+    m.Bar(
+        label=_MESES_CURTOS[mes - 1],
+        pct=int(round((por_mes[(ano, mes)] / max_kg_mes) * 100)) if max_kg_mes > 0 else 0,
+        value=por_mes[(ano, mes)],
+    )
+    for ano, mes in janela_5_meses
     ]
 
     return {
