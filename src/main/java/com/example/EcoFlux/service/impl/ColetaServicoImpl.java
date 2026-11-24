@@ -283,7 +283,7 @@ public class ColetaServicoImpl implements ColetaServico {
                     "Nao e possivel concluir a coleta no status atual '%s'.", statusAtual));
         }
 
-        String cpfDigitado = requisicao.documentoRecebedor() != null
+        String ultimos4Digitados = requisicao.documentoRecebedor() != null
                 ? requisicao.documentoRecebedor().replaceAll("\\D", "")
                 : "";
         String cpfSolicitante = (coleta.getUsuarioSolicitante() != null
@@ -296,10 +296,12 @@ public class ColetaServicoImpl implements ColetaServico {
                 ? coleta.getInstituicao().getUsuarioResponsavel().getDocumento().replaceAll("\\D", "")
                 : "";
 
-        if (cpfDigitado.length() != 11
-                || (!cpfDigitado.equals(cpfSolicitante) && !cpfDigitado.equals(cpfResponsavel))) {
+        boolean bateSolicitante = cpfSolicitante.length() >= 4 && cpfSolicitante.endsWith(ultimos4Digitados);
+        boolean bateResponsavel = cpfResponsavel.length() >= 4 && cpfResponsavel.endsWith(ultimos4Digitados);
+
+        if (ultimos4Digitados.length() != 4 || (!bateSolicitante && !bateResponsavel)) {
             throw new ExcecaoConflitoNegocio(
-                    "CPF incorreto: informe o CPF de quem solicitou a coleta ou do responsavel pela instituicao."
+                    "Codigo incorreto: informe os 4 ultimos digitos do CPF de quem solicitou a coleta ou do responsavel pela instituicao."
             );
         }
 
@@ -307,7 +309,7 @@ public class ColetaServicoImpl implements ColetaServico {
             coleta.setPesoRealKg(requisicao.pesoRealKg());
         }
         coleta.setNomeRecebedor(requisicao.nomeRecebedor().trim());
-        coleta.setDocumentoRecebedor(cpfDigitado);
+        coleta.setDocumentoRecebedor(ultimos4Digitados);
         coleta.setAssinaturaDigital(requisicao.assinaturaDigital().trim());
         coleta.setDataConclusao(LocalDateTime.now());
         coleta.setStatus(StatusColeta.CONCLUIDA);

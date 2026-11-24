@@ -1988,6 +1988,16 @@ def agendamentos() -> None:
                             h(f'<div class="muted" style="font-size:12px;margin-bottom:8px">'
                               f'{escape(" • ".join(resumo_partes))}</div>')
 
+                        status_detalhe = str(detalhe_coleta.get('status') or '').upper()
+                        if pode_agendar and status_detalhe and status_detalhe not in ('CONCLUIDA', 'REALIZADA', 'CANCELADA'):
+                            h(
+                                '<div style="margin:8px 0 12px;padding:10px 12px;border-radius:8px;'
+                                'background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;font-size:12px">'
+                                '<strong>Confirmação na retirada:</strong> quando o motorista chegar, informe os '
+                                '<strong>4 últimos dígitos do CPF</strong> do solicitante para validar e concluir a coleta.'
+                                '</div>'
+                            )
+
                         try:
                             eventos = buscar_timeline_coleta(coleta_id)
                             etapas = _converter_timeline_para_etapas(eventos)
@@ -2002,7 +2012,6 @@ def agendamentos() -> None:
                             h('<div class="muted" style="font-size:13px;padding:8px 0">'
                               'Sem eventos registrados para esta solicitação.</div>')
 
-                        status_detalhe = str(detalhe_coleta.get('status') or '').upper()
                         if pode_agendar and status_detalhe and status_detalhe not in ('CONCLUIDA', 'REALIZADA', 'CANCELADA'):
                             def _cancelar_atual(c_id: int = coleta_id) -> None:
                                 try:
@@ -3496,6 +3505,12 @@ def rotas() -> None:
     eh_admin = eh_administrador()
     eh_cooperativa = perfil == 'COOPERATIVA'
     eh_motorista = perfil == 'MOTORISTA'
+
+    if not (eh_motorista or eh_cooperativa or eh_admin):
+        ui.notify('Acesso restrito a motoristas e cooperativas.', type='negative')
+        ui.navigate.to('/dashboard')
+        return
+
     with layout('/rotas'):
         page_header(
             'Rotas e entregas',
@@ -3504,138 +3519,140 @@ def rotas() -> None:
 
         dialog_assinatura = ui.dialog()
         estado: dict[str, Any] = {'coleta_selecionada_id': None}
+        escala_container = ui.element('div').classes('w-full')
 
-        @ui.refreshable
-        def secao_escala_motoristas() -> None:
+        def render_escala_motoristas() -> None:
+            escala_container.clear()
             if not (eh_cooperativa or eh_admin):
                 return
 
-            with card('Escalar motorista para coletas'):
-                try:
-                    if eh_admin:
-                        coops = listar_cooperativas(status='ATIVO')
-                    else:
-                        coops = [
-                            i for i in listar_minhas_instituicoes()
-                            if str(i.get('tipo') or '').upper() == 'COOPERATIVA'
-                            and str(i.get('status') or '').upper() == 'ATIVO'
-                        ]
-                except ApiError as exc:
-                    h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
-                    return
-
-                if not coops:
-                    h('<div class="muted" style="font-size:13px;padding:6px 0">'
-                      'Nenhuma cooperativa ativa disponível para escalar motoristas.</div>')
-                    return
-
-                motoristas_por_coop: dict[int, dict[int, str]] = {}
-                for coop in coops:
-                    cid = int(coop['id'])
+            with escala_container:
+                with card('Escalar motorista para coletas'):
                     try:
-                        membros = listar_membros_instituicao(cid)
-                        motoristas_por_coop[cid] = {
-                            int(mem['usuarioId']): str(mem.get('nomeUsuario') or f"Motorista #{mem['usuarioId']}")
-                            for mem in membros
-                            if mem.get('ativo', True)
-                            and str(mem.get('papel') or '').upper() == 'MOTORISTA'
-                            and mem.get('usuarioId') is not None
-                        }
-                    except ApiError:
-                        motoristas_por_coop[cid] = {}
+                        if eh_admin:
+                            coops = listar_cooperativas(status='ATIVO')
+                        else:
+                            coops = [
+                                i for i in listar_minhas_instituicoes()
+                                if str(i.get('tipo') or '').upper() == 'COOPERATIVA'
+                                and str(i.get('status') or '').upper() == 'ATIVO'
+                            ]
+                    except ApiError as exc:
+                        h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
+                        return
 
-                try:
-                    todas_coletas = listar_coletas_operacional()
-                except ApiError as exc:
-                    h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
-                    return
+                    if not coops:
+                        h('<div class="muted" style="font-size:13px;padding:6px 0">'
+                          'Nenhuma cooperativa ativa disponível para escalar motoristas.</div>')
+                        return
 
-                coop_ids = {int(c['id']) for c in coops}
-                coletas_escalaveis = [
-                    c for c in todas_coletas
-                    if str(c.get('status') or '').upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA')
-                    and (
-                        c.get('idCooperativa') is None
-                        or int(c['idCooperativa']) in coop_ids
-                    )
-                ]
+                    motoristas_por_coop: dict[int, dict[int, str]] = {}
+                    for coop in coops:
+                        cid = int(coop['id'])
+                        try:
+                            membros = listar_membros_instituicao(cid)
+                            motoristas_por_coop[cid] = {
+                                int(mem['usuarioId']): str(mem.get('nomeUsuario') or f"Motorista #{mem['usuarioId']}")
+                                for mem in membros
+                                if mem.get('ativo', True)
+                                and str(mem.get('papel') or '').upper() == 'MOTORISTA'
+                                and mem.get('usuarioId') is not None
+                            }
+                        except ApiError:
+                            motoristas_por_coop[cid] = {}
 
-                if not coletas_escalaveis:
-                    h('<div class="muted" style="font-size:13px;padding:6px 0">'
-                      'Nenhuma coleta vinculada à cooperativa aguardando escala de motorista no momento.</div>')
-                    return
+                    try:
+                        todas_coletas = listar_coletas_operacional()
+                    except ApiError as exc:
+                        h(f'<div class="muted" style="font-size:13px">{escape(exc.message)}</div>')
+                        return
 
-                coop_padrao_id = int(coops[0]['id'])
-
-                with ui.element('div').classes('list-divided'):
-                    for col in coletas_escalaveis:
-                        col_id = int(col['id'])
-                        coop_id = int(col['idCooperativa']) if col.get('idCooperativa') is not None else coop_padrao_id
-                        st_raw = str(col.get('status') or '').upper()
-                        st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw)
-                        mat_raw = str(col.get('tipoMaterial') or '').upper()
-                        mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
-                        qtd_str = f'{col.get("quantidadeEstimadaKg") or 0} kg'
-                        origem_str = str(col.get('nomeInstituicao') or col.get('nomeSolicitante') or 'Coleta avulsa')
-                        local_str = f'{col.get("logradouro") or ""}, {col.get("numero") or ""} - {col.get("bairro") or ""}'
-                        opcoes_mot = motoristas_por_coop.get(coop_id, {})
-
-                        mot_atribuido = (
-                            str(col.get('nomeMotorista') or col.get('motoristaNome') or '').strip()
-                            or _MOTORISTAS_ESCALADOS.get(col_id, '')
+                    coop_ids = {int(c['id']) for c in coops}
+                    coletas_escalaveis = [
+                        c for c in todas_coletas
+                        if str(c.get('status') or '').upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA')
+                        and (
+                            c.get('idCooperativa') is None
+                            or int(c['idCooperativa']) in coop_ids
                         )
-                        if not mot_atribuido and (col.get('idMotorista') or col.get('motoristaId')):
-                            mid_col = int(col.get('idMotorista') or col.get('motoristaId'))
-                            mot_atribuido = opcoes_mot.get(mid_col, f'Motorista #{mid_col}')
+                    ]
 
-                        with ui.element('div').classes('item').style('flex-wrap:wrap;gap:12px'):
-                            with ui.element('div').style('flex:1;min-width:220px'):
-                                h(
-                                    f'<div class="item-title" style="font-size:14px">'
-                                    f'Coleta #{col_id} • {escape(origem_str)}</div>'
-                                    f'<div class="item-meta" style="font-size:12px">'
-                                    f'{escape(mat_lbl)} ({escape(qtd_str)}) • {escape(local_str)}</div>'
-                                )
+                    if not coletas_escalaveis:
+                        h('<div class="muted" style="font-size:13px;padding:6px 0">'
+                          'Nenhuma coleta vinculada à cooperativa aguardando escala de motorista no momento.</div>')
+                        return
 
-                            h(f'<span class="badge b-blue">{escape(st_lbl)}</span>')
+                    coop_padrao_id = int(coops[0]['id'])
 
-                            if mot_atribuido:
-                                h(f'<span class="badge b-green">Motorista: {escape(mot_atribuido)}</span>')
-                            elif not opcoes_mot:
-                                h('<span class="muted" style="font-size:12px">'
-                                  'Cadastre um motorista em Minha instituição</span>')
-                            else:
-                                sel_mot = ui.select(
-                                    opcoes_mot,
-                                    value=next(iter(opcoes_mot.keys())),
-                                ).props('outlined dense hide-bottom-space options-dense').classes('eco-field').style('width:200px')
+                    with ui.element('div').classes('list-divided'):
+                        for col in coletas_escalaveis:
+                            col_id = int(col['id'])
+                            coop_id = int(col['idCooperativa']) if col.get('idCooperativa') is not None else coop_padrao_id
+                            st_raw = str(col.get('status') or '').upper()
+                            st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw)
+                            mat_raw = str(col.get('tipoMaterial') or '').upper()
+                            mat_lbl = _ENUM_PARA_CHIP.get(mat_raw, mat_raw.capitalize())
+                            qtd_str = f'{col.get("quantidadeEstimadaKg") or 0} kg'
+                            origem_str = str(col.get('nomeInstituicao') or col.get('nomeSolicitante') or 'Coleta avulsa')
+                            local_str = f'{col.get("logradouro") or ""}, {col.get("numero") or ""} - {col.get("bairro") or ""}'
+                            opcoes_mot = motoristas_por_coop.get(coop_id, {})
 
-                                def _escalar(
-                                    c_id: int,
-                                    select_ref: ui.select,
-                                    status_atual: str,
-                                    mapa_m: dict[int, str],
-                                ) -> None:
-                                    if select_ref.value is None:
-                                        ui.notify('Selecione um motorista.', type='warning')
-                                        return
-                                    mot_id = int(select_ref.value)
-                                    try:
-                                        if status_atual == 'ENVIADA':
-                                            atualizar_status_coleta(c_id, 'AGENDADA', 'Agendada pela cooperativa')
-                                        atribuir_motorista_coleta(c_id, mot_id)
-                                        _MOTORISTAS_ESCALADOS[c_id] = mapa_m.get(mot_id, f'Motorista #{mot_id}')
-                                        ui.notify(f'Motorista escalado para a coleta #{c_id}!', type='positive')
-                                        secao_escala_motoristas.refresh()
-                                        conteudo_rotas.refresh()
-                                    except ApiError as exc:
-                                        ui.notify(exc.message, type='negative')
+                            mot_atribuido = (
+                                str(col.get('nomeMotorista') or col.get('motoristaNome') or '').strip()
+                                or _MOTORISTAS_ESCALADOS.get(col_id, '')
+                            )
+                            if not mot_atribuido and (col.get('idMotorista') or col.get('motoristaId')):
+                                mid_col = int(col.get('idMotorista') or col.get('motoristaId'))
+                                mot_atribuido = opcoes_mot.get(mid_col, f'Motorista #{mid_col}')
 
-                                eco_button(
-                                    'Atribuir motorista',
-                                    lambda _e=None, cid_a=col_id, sm=sel_mot, sa=st_raw, mm=opcoes_mot: _escalar(cid_a, sm, sa, mm),
-                                    cls='dark',
-                                )
+                            with ui.element('div').classes('item').style('flex-wrap:wrap;gap:12px'):
+                                with ui.element('div').style('flex:1;min-width:220px'):
+                                    h(
+                                        f'<div class="item-title" style="font-size:14px">'
+                                        f'Coleta #{col_id} • {escape(origem_str)}</div>'
+                                        f'<div class="item-meta" style="font-size:12px">'
+                                        f'{escape(mat_lbl)} ({escape(qtd_str)}) • {escape(local_str)}</div>'
+                                    )
+
+                                h(f'<span class="badge b-blue">{escape(st_lbl)}</span>')
+
+                                if mot_atribuido:
+                                    h(f'<span class="badge b-green">Motorista: {escape(mot_atribuido)}</span>')
+                                elif not opcoes_mot:
+                                    h('<span class="muted" style="font-size:12px">'
+                                      'Cadastre um motorista em Minha instituição</span>')
+                                else:
+                                    sel_mot = ui.select(
+                                        opcoes_mot,
+                                        value=next(iter(opcoes_mot.keys())),
+                                    ).props('outlined dense hide-bottom-space options-dense').classes('eco-field').style('width:200px')
+
+                                    def _escalar(
+                                        c_id: int,
+                                        select_ref: ui.select,
+                                        status_atual: str,
+                                        mapa_m: dict[int, str],
+                                    ) -> None:
+                                        if select_ref.value is None:
+                                            ui.notify('Selecione um motorista.', type='warning')
+                                            return
+                                        mot_id = int(select_ref.value)
+                                        try:
+                                            if status_atual == 'ENVIADA':
+                                                atualizar_status_coleta(c_id, 'AGENDADA', 'Agendada pela cooperativa')
+                                            atribuir_motorista_coleta(c_id, mot_id)
+                                            _MOTORISTAS_ESCALADOS[c_id] = mapa_m.get(mot_id, f'Motorista #{mot_id}')
+                                            ui.notify(f'Motorista escalado para a coleta #{c_id}!', type='positive')
+                                            render_escala_motoristas()
+                                            conteudo_rotas.refresh()
+                                        except ApiError as exc:
+                                            ui.notify(exc.message, type='negative')
+
+                                    eco_button(
+                                        'Atribuir motorista',
+                                        lambda _e=None, cid_a=col_id, sm=sel_mot, sa=st_raw, mm=opcoes_mot: _escalar(cid_a, sm, sa, mm),
+                                        cls='dark',
+                                    )
 
         def abrir_modal_assinatura(parada: dict[str, Any]) -> None:
             coleta_id = int(parada['coletaId'])
@@ -3664,9 +3681,9 @@ def rotas() -> None:
                     )
                     with ui.element('div').classes('form-grid cols-2'):
                         campo_doc = form_field(
-                            'CPF do recebedor',
-                            placeholder='Somente números (11 dígitos)',
-                            props='mask="###########" inputmode="numeric"',
+                            '4 últimos dígitos do CPF',
+                            placeholder='Ex: 4829',
+                            props='mask="####" inputmode="numeric"',
                         )
                         campo_peso = form_field(
                             'Peso real coletado (kg)',
@@ -3746,8 +3763,8 @@ def rotas() -> None:
                             return
 
                         doc_limpo = re.sub(r'\D', '', campo_doc.value or '')
-                        if len(doc_limpo) != 11:
-                            ui.notify('Informe o CPF do recebedor com 11 dígitos (somente números).', type='warning')
+                        if len(doc_limpo) != 4:
+                            ui.notify('Informe os 4 últimos dígitos do CPF do solicitante.', type='warning')
                             return
 
                         peso_val: float | None = None
@@ -3797,7 +3814,7 @@ def rotas() -> None:
                             )
                             estado['coleta_selecionada_id'] = None
                             dialog_assinatura.close()
-                            secao_escala_motoristas.refresh()
+                            render_escala_motoristas()
                             conteudo_rotas.refresh()
                         except ApiError as exc:
                             ui.notify(exc.message, type='negative')
@@ -3993,7 +4010,7 @@ def rotas() -> None:
                         on_action=_selecionar_parada,
                     )
 
-        secao_escala_motoristas()
+        render_escala_motoristas()
         conteudo_rotas()
 
 @ui.page('/minha-instituicao')

@@ -13,8 +13,8 @@ public record ConcluirColetaMotoristaRequisicao(
         @NotBlank(message = "Informe o nome do responsavel que acompanhou a retirada no local.")
         String nomeRecebedor,
 
-        @NotBlank(message = "Informe o CPF do responsavel que acompanhou a retirada no local.")
-        @Pattern(regexp = "\\d{11}", message = "O CPF do recebedor deve conter exatamente 11 digitos numericos.")
+        @NotBlank(message = "Informe os 4 ultimos digitos do CPF do solicitante.")
+        @Pattern(regexp = "\\d{4}", message = "Informe exatamente os 4 ultimos digitos numericos do CPF.")
         String documentoRecebedor,
 
         @NotBlank(message = "A assinatura digital do responsavel no local e obrigatoria.")
