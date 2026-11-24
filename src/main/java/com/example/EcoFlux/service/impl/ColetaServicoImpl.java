@@ -47,19 +47,35 @@ public class ColetaServicoImpl implements ColetaServico {
             throw new ExcecaoConflitoNegocio("O agendamento deve ser realizado com no minimo 1 hora de antecedencia.");
         }
 
+        boolean ehAdmin = usuarioSolicitante.getPerfil() == PerfilUsuario.ADMINISTRADOR;
+        boolean ehGestorInstituicao = usuarioSolicitante.getPerfil() == PerfilUsuario.INSTITUICAO;
+
         Instituicao instituicao = null;
-        if (requisicao.instituicaoId() != null) {
+        if (requisicao.instituicaoId() == null) {
+            if (!ehGestorInstituicao && !ehAdmin) {
+                throw new ExcecaoConflitoNegocio(
+                        "Apenas instituicoes (condominios ou empresas), moradores vinculados ao seu condominio ou administradores podem agendar coletas."
+                );
+            }
+        } else {
             instituicao = instituicaoRepositorio.findById(requisicao.instituicaoId())
                     .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(
                             String.format("Instituicao com ID %d nao encontrada.", requisicao.instituicaoId())
                     ));
 
-            boolean ehResponsavel = instituicao.getUsuarioResponsavel().getId().equals(usuarioSolicitante.getId());
-            boolean ehMembroAtivo = membroRepositorio.existsByInstituicaoIdAndUsuarioIdAndAtivoTrue(
-                    instituicao.getId(), usuarioSolicitante.getId());
+            if (instituicao.getTipo() == TipoInstituicao.COOPERATIVA) {
+                throw new ExcecaoConflitoNegocio("Cooperativas nao podem ser informadas como instituicao solicitante.");
+            }
 
-            if (!ehResponsavel && !ehMembroAtivo && usuarioSolicitante.getPerfil() != PerfilUsuario.ADMINISTRADOR) {
-                throw new ExcecaoConflitoNegocio("Apenas o responsavel ou membros vinculados a instituicao podem agendar coletas para ela.");
+            boolean ehResponsavel = instituicao.getUsuarioResponsavel().getId().equals(usuarioSolicitante.getId());
+            boolean ehMoradorAtivo = membroRepositorio.findByInstituicaoAndUsuario(instituicao, usuarioSolicitante)
+                    .map(v -> Boolean.TRUE.equals(v.getAtivo()) && v.getPapel() == PapelMembroInstituicao.MORADOR)
+                    .orElse(false);
+
+            if (!ehResponsavel && !ehMoradorAtivo && !ehAdmin) {
+                throw new ExcecaoConflitoNegocio(
+                        "Apenas o responsavel ou moradores ativos vinculados a esta instituicao podem agendar coletas para ela."
+                );
             }
         }
 
@@ -267,11 +283,31 @@ public class ColetaServicoImpl implements ColetaServico {
                     "Nao e possivel concluir a coleta no status atual '%s'.", statusAtual));
         }
 
+        String cpfDigitado = requisicao.documentoRecebedor() != null
+                ? requisicao.documentoRecebedor().replaceAll("\\D", "")
+                : "";
+        String cpfSolicitante = (coleta.getUsuarioSolicitante() != null
+                && coleta.getUsuarioSolicitante().getDocumento() != null)
+                ? coleta.getUsuarioSolicitante().getDocumento().replaceAll("\\D", "")
+                : "";
+        String cpfResponsavel = (coleta.getInstituicao() != null
+                && coleta.getInstituicao().getUsuarioResponsavel() != null
+                && coleta.getInstituicao().getUsuarioResponsavel().getDocumento() != null)
+                ? coleta.getInstituicao().getUsuarioResponsavel().getDocumento().replaceAll("\\D", "")
+                : "";
+
+        if (cpfDigitado.length() != 11
+                || (!cpfDigitado.equals(cpfSolicitante) && !cpfDigitado.equals(cpfResponsavel))) {
+            throw new ExcecaoConflitoNegocio(
+                    "CPF incorreto: informe o CPF de quem solicitou a coleta ou do responsavel pela instituicao."
+            );
+        }
+
         if (requisicao.pesoRealKg() != null) {
             coleta.setPesoRealKg(requisicao.pesoRealKg());
         }
         coleta.setNomeRecebedor(requisicao.nomeRecebedor().trim());
-        coleta.setDocumentoRecebedor(requisicao.documentoRecebedor() != null ? requisicao.documentoRecebedor().trim() : null);
+        coleta.setDocumentoRecebedor(cpfDigitado);
         coleta.setAssinaturaDigital(requisicao.assinaturaDigital().trim());
         coleta.setDataConclusao(LocalDateTime.now());
         coleta.setStatus(StatusColeta.CONCLUIDA);
@@ -299,7 +335,7 @@ public class ColetaServicoImpl implements ColetaServico {
                 && coleta.getInstituicao().getUsuarioResponsavel().getId().equals(usuarioAutenticado.getId());
         boolean ehMembroInstituicao = coleta.getInstituicao() != null
                 && membroRepositorio.existsByInstituicaoIdAndUsuarioIdAndAtivoTrue(
-                        coleta.getInstituicao().getId(), usuarioAutenticado.getId());
+                coleta.getInstituicao().getId(), usuarioAutenticado.getId());
         boolean ehResponsavelCooperativa = coleta.getCooperativa() != null
                 && coleta.getCooperativa().getUsuarioResponsavel().getId().equals(usuarioAutenticado.getId());
         boolean ehMotoristaEscalado = coleta.getMotorista() != null
@@ -329,7 +365,7 @@ public class ColetaServicoImpl implements ColetaServico {
     }
 
     private void registrarEventoTimeline(Coleta coleta, StatusColeta anterior, StatusColeta novo,
-                                        String observacao, Usuario autor) {
+                                         String observacao, Usuario autor) {
         HistoricoStatusColeta evento = HistoricoStatusColeta.builder()
                 .coleta(coleta)
                 .statusAnterior(anterior)

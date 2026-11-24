@@ -28,9 +28,9 @@ public record RotaMotoristaItemResposta(
         String telefoneResponsavelLocal
 ) {
     public static RotaMotoristaItemResposta converter(Coleta coleta) {
-        Usuario responsavel = (coleta.getInstituicao() != null)
-                ? coleta.getInstituicao().getUsuarioResponsavel()
-                : coleta.getUsuarioSolicitante();
+        Usuario responsavel = (coleta.getUsuarioSolicitante() != null)
+                ? coleta.getUsuarioSolicitante()
+                : (coleta.getInstituicao() != null ? coleta.getInstituicao().getUsuarioResponsavel() : null);
 
         String origem = (coleta.getInstituicao() != null)
                 ? coleta.getInstituicao().getNome()
@@ -61,8 +61,8 @@ public record RotaMotoristaItemResposta(
                 coleta.getEstado(),
                 coleta.getCep(),
                 origem,
-                responsavel.getNome(),
-                responsavel.getTelefone()
+                responsavel != null ? responsavel.getNome() : "-",
+                responsavel != null ? responsavel.getTelefone() : null
         );
     }
 }
