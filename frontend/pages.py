@@ -1,7 +1,7 @@
 """As telas internas do EcoFlux.
 
 Cada tela monta o layout base e preenche o conteudo com os componentes de
-``ui_kit`` e os dados de ``mocks``.
+``ui_kit``
 """
 
 from __future__ import annotations
@@ -168,9 +168,16 @@ _STATUS_CADASTRO_OPCOES = {
     'INATIVO': 'Inativo',
 }
 
+_UFS_BRASIL: list[str] = [
+    'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO',
+    'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI',
+    'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+]
+
 _MESES_CURTOS = ('Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez')
 
 _CONFIRMACOES_ROTAS_ADMIN: list[dict[str, Any]] = []
+_MOTORISTAS_ESCALADOS: dict[int, str] = {}
 
 
 def _obrigatorios(**campos) -> bool:
@@ -290,7 +297,6 @@ def _normalizar_tipo_material_coleta(valor: str) -> str:
 
 
 def _montar_data_hora_futura(data_str: str, janela_str: str) -> str | None:
-    """Converte YYYY-MM-DD + janela de horario em ISO LocalDateTime no futuro."""
     data_limpa = (data_str or '').strip()
     if not data_limpa:
         return None
@@ -320,7 +326,7 @@ def _formatar_data_curta(iso_str: str) -> str:
 
 
 def _ordenar_coletas_canceladas_por_ultimo(coletas: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Mantem a ordem original, mas empurra qualquer coleta CANCELADA para o final."""
+    """isso aq deixa a ordem original,mas as canceladas vao pro ultimo."""
     ativas_ou_concluidas = [
         c for c in coletas if str(c.get('status') or '').strip().upper() != 'CANCELADA'
     ]
@@ -421,12 +427,11 @@ def _atualizar_kpi(base: m.Kpi, label: str, value: str) -> m.Kpi:
 
 
 def _construir_rank_item(pos: int, name: str, value: str, pct: int) -> m.Metric:
-    """Cria um m.Metric compativel com rank_list (metric.label, metric.value, metric.pct)."""
     return m.Metric(label=name, value=value, pct=pct)
 
 
 def _normalizar_nome_ranking(nome: str) -> str:
-    """Evita nomes totalmente minusculos no ranking sem alterar capitalizacao ja existente."""
+    """Evita nomes totalmente minusculos no ranking"""
     limpo = (nome or '').strip()
     if not limpo:
         return limpo
@@ -435,7 +440,7 @@ def _normalizar_nome_ranking(nome: str) -> str:
     return limpo
 
 def _censurar_nome_ranking(nome: str, nome_usuario_atual: str) -> str:
-    """Mantem o nome completo apenas do usuario logado; censura os demais (ex: Ad*** *****ux)."""
+    """Mantem o nome completo apenas do usuario logado; censura os demais."""
     limpo = _normalizar_nome_ranking(nome)
     atual = _normalizar_nome_ranking(nome_usuario_atual)
     if not limpo or limpo.lower() == atual.lower():
@@ -454,7 +459,6 @@ def _montar_dados_dashboard() -> dict[str, Any]:
     """Busca dados reais disponiveis na API para todos os blocos do Dashboard."""
     coletas: list[dict[str, Any]] = []
     pontos: list[dict[str, Any]] = []
-    instituicoes: list[dict[str, Any]] = []
 
     try:
         coletas = listar_coletas_operacional()
@@ -469,13 +473,24 @@ def _montar_dados_dashboard() -> dict[str, Any]:
     except ApiError:
         pontos = []
 
+    instituicoes_por_id: dict[int, dict[str, Any]] = {}
     try:
-        instituicoes = listar_instituicoes() + listar_cooperativas()
+        for item in listar_instituicoes() + listar_cooperativas():
+            if item.get('id') is not None:
+                instituicoes_por_id[int(item['id'])] = item
     except ApiError:
         try:
-            instituicoes = listar_minhas_instituicoes()
+            for item in listar_minhas_instituicoes():
+                if item.get('id') is not None:
+                    instituicoes_por_id[int(item['id'])] = item
         except ApiError:
-            instituicoes = []
+            pass
+
+    instituicoes = list(instituicoes_por_id.values())
+    instituicoes_ativas = [
+        i for i in instituicoes
+        if str(i.get('status') or '').strip().upper() == 'ATIVO'
+    ]
 
     realizadas = [
         c for c in coletas
@@ -516,8 +531,8 @@ def _montar_dados_dashboard() -> dict[str, Any]:
         replace(
             m.KPIS_DASHBOARD[3],
             label='INSTITUIÇÕES',
-            value=f'{len(instituicoes):02d}' if len(instituicoes) < 10 else str(len(instituicoes)),
-            hint='cooperativas, condomínios e empresas',
+            value=f'{len(instituicoes_ativas):02d}' if len(instituicoes_ativas) < 10 else str(len(instituicoes_ativas)),
+            hint=f'de {len(instituicoes)} cadastradas' if instituicoes else 'nenhuma cadastrada',
         ),
     ]
 
@@ -773,9 +788,8 @@ def _ultimos_5_meses_base_atual() -> list[tuple[int, int]]:
     meses.reverse()
     return meses
 
-
 def _montar_dados_ecoimpacto() -> dict[str, Any]:
-    """Busca dados reais de EcoImpacto, coletas e instituicoes sem vazar mocks."""
+    """Busca dados reais de EcoImpacto, coletas e instituicoes."""
     kpis_out = [
         replace(m.KPIS_ECOIMPACTO[0], label='CO2 EVITADO', value='0 kg', hint='sem registro no período'),
         replace(m.KPIS_ECOIMPACTO[1], label='ÁRVORES PRESERVADAS', value='0', hint='equivalência estimada'),
@@ -955,7 +969,7 @@ def _montar_dados_ecoimpacto() -> dict[str, Any]:
     }
 
 def _montar_dados_ecoselo() -> dict[str, Any]:
-    """Busca os selos reais do usuario autenticado em /api/v1/ecoselos/meus."""
+    """Busca os selos do usuario autenticado em /api/v1/ecoselos/meus."""
     selos: list[dict[str, Any]] = []
     try:
         res = listar_meus_ecoselos()
@@ -1365,7 +1379,7 @@ def pontos_de_coleta() -> None:
                         ed_cid = form_field('Cidade', value=str(ponto.get('cidade') or ''))
 
                     with ui.element('div').classes('form-grid cols-2'):
-                        ed_uf = form_field('UF', value=str(ponto.get('estado') or 'BA'), props='mask="AA"')
+                        ed_uf = form_field('UF', options=_UFS_BRASIL, value=None, props='mask="AA"')
                         ed_cep = form_field(
                             'CEP',
                             value=re.sub(r'\D', '', str(ponto.get('cep') or '')),
@@ -1556,7 +1570,7 @@ def pontos_de_coleta() -> None:
                             cidade = form_field('Cidade', placeholder='Eunápolis')
 
                         with ui.element('div').classes('form-grid cols-2'):
-                            uf = form_field('UF', value='BA', placeholder='BA', props='mask="AA"')
+                            uf = form_field('UF', options=_UFS_BRASIL, value=None, props='mask="AA"')
                             cep = form_field(
                                 'CEP',
                                 placeholder='45820000',
@@ -1756,18 +1770,10 @@ def agendamentos() -> None:
                             data = form_field('Data preferencial', props='type=date')
                             janela = form_field('Horários', options=m.JANELAS_HORARIO,
                                                 value=m.JANELAS_HORARIO[0])
-                        with ui.element('div').classes('form-grid cols-2'):
-                            quantidade = form_field('Quantidade estimada', value='50',
-                                                    props='suffix=KG type=number min=0.1 step=0.1')
-                            with ui.element('div'):
-                                h('<label class="form-label">Cooperativa</label>')
-                                cooperativa_select = ui.select(
-                                    mapa_cooperativas,
-                                    value=None,
-                                ).props(
-                                    'outlined dense hide-bottom-space options-dense clearable '
-                                    'aria-label="Cooperativa"'
-                                ).classes('eco-field')
+
+                        quantidade = form_field('Quantidade estimada', value='50',
+                                                props='suffix=KG type=number min=0.1 step=0.1')
+
                         endereco_coleta = form_field(
                             'Endereço de coleta',
                             placeholder='Rua, Numero, Bairro, Cidade',
@@ -1832,8 +1838,8 @@ def agendamentos() -> None:
                             }
                             if mapa_instituicoes and instituicao_select.value is not None:
                                 payload['instituicaoId'] = int(instituicao_select.value)
-                            if mapa_cooperativas and cooperativa_select.value is not None:
-                                payload['cooperativaId'] = int(cooperativa_select.value)
+                            if mapa_cooperativas:
+                                payload['cooperativaId'] = next(iter(mapa_cooperativas.keys()))
 
                             try:
                                 criada = agendar_coleta(payload)
@@ -1867,7 +1873,9 @@ def agendamentos() -> None:
                         eco_button('Cadastrar minha instituição', lambda: ui.navigate.to('/minha-instituicao'), cls='outline')
 
             with card():
-                status_card_container = ui.element('div')
+                status_card_container = ui.element('div').style(
+                    'max-height: 480px; overflow-y: auto; padding-right: 6px;'
+                )
 
                 def render_timeline(coleta_id: int | None) -> None:
                     status_card_container.clear()
@@ -1879,7 +1887,7 @@ def agendamentos() -> None:
                               'Nenhuma solicitação selecionada.</div>')
                             return
                         h(f'<div class="card-head"><div><div class="card-title">'
-                          f'Status da solicitação # {coleta_id}</div></div></div>')
+                          f'Status da solicitação</div></div></div>')
 
                         detalhe_coleta: dict[str, Any] = {}
                         resumo_partes: list[str] = []
@@ -2443,7 +2451,6 @@ def relatorios() -> None:
             'Gere documentos reais em CSV para gestão logística, ESG e prestação de contas',
         )
 
-        # Carrega dados reais
         coletas: list[dict[str, Any]] = []
         try:
             coletas = listar_coletas_operacional()
@@ -2475,7 +2482,6 @@ def relatorios() -> None:
             except ApiError:
                 continue
 
-        # KPIs reais
         concluidas = [
             c for c in coletas
             if str(c.get('status') or '').upper() in ('CONCLUIDA', 'REALIZADA')
@@ -2968,7 +2974,7 @@ def administracao() -> None:
         ui.notify('Acesso restrito: apenas administradores podem acessar /administracao.', type='negative')
         ui.navigate.to('/dashboard')
         return
-
+    
     with layout('/administracao'):
         page_header('Usuários e instituições',
                     'Controle de perfis, permissões e aprovação de cadastros')
@@ -3059,6 +3065,8 @@ def administracao() -> None:
                             atualizar_kpis_admin()
                             if carregar_listas_ref[0]:
                                 carregar_listas_ref[0]()
+                            if carregar_pendentes_ref[0]:
+                                carregar_pendentes_ref[0](notificar_erro=False)
                         except ApiError as exc:
                             ui.notify(exc.message, type='negative')
 
@@ -3074,7 +3082,6 @@ def administracao() -> None:
             dialog_editar_entidade.open()
 
         def abrir_modal_excluir_entidade(entidade: dict[str, Any], categoria: str) -> None:
-            """Avisa que a API atual nao possui endpoint DELETE para instituicao/cooperativa."""
             dialog_excluir_entidade.clear()
             eid = entidade.get('id')
             nome_ent = str(entidade.get('nome') or f'{categoria.capitalize()} #{eid or "-"}')
@@ -3125,8 +3132,8 @@ def administracao() -> None:
 
                         with ui.element('div').classes('item'):
                             with ui.element('div').style('flex:1;min-width:0'):
-                                h(f'<div class="item-title">{escape(nome_e)}</div>'
-                                  f'<div class="item-meta">{escape(meta_txt)}</div>')
+                                h(f'<div class="item-title" style="font-size:14px;font-weight:600">{escape(nome_e)}</div>'
+                                  f'<div class="item-meta" style="font-size:12px;margin-top:2px">{escape(meta_txt)}</div>')
                             h(f'<span class="badge b-{tone}" style="margin-right:6px">'
                               f'{escape(st_lbl)}</span>')
                             with ui.row().classes('gap-1 items-center'):
@@ -3142,12 +3149,15 @@ def administracao() -> None:
                                 )
 
         def carregar_listas_admin() -> None:
+            status_analise = ('AGUARDANDO_ANALISE', 'PENDENTE', 'EM_ANALISE')
+
             if inst_box_ref[0] is not None:
                 try:
                     todas_inst = listar_instituicoes()
                     somente_inst = [
                         i for i in todas_inst
                         if str(i.get('tipo') or '').upper() != 'COOPERATIVA'
+                        and str(i.get('status') or '').upper() not in status_analise
                     ]
                     _render_lista_entidade(
                         inst_box_ref[0],
@@ -3166,10 +3176,21 @@ def administracao() -> None:
 
             if coop_box_ref[0] is not None:
                 try:
-                    coops = listar_cooperativas()
+                    coops = [
+                        c for c in listar_cooperativas()
+                        if str(c.get('status') or '').upper() not in status_analise
+                    ]
                     _render_lista_entidade(
                         coop_box_ref[0],
                         coops,
+                        'COOPERATIVA',
+                        'Nenhuma cooperativa vinculada até o momento.',
+                    )
+                except ApiError as exc:
+                    ui.notify(exc.message, type='warning')
+                    _render_lista_entidade(
+                        coop_box_ref[0],
+                        [],
                         'COOPERATIVA',
                         'Nenhuma cooperativa vinculada até o momento.',
                     )
@@ -3324,60 +3345,77 @@ def administracao() -> None:
                 def carregar_pendentes(notificar_erro: bool = False) -> None:
                     pendentes_container.clear()
                     with pendentes_container:
-                        try:
-                            pendentes = listar_usuarios(status='AGUARDANDO_ANALISE')
-                            if not pendentes:
-                                h('<div class="muted" style="font-size:12px;padding:8px 0">'
-                                  'Nenhum cadastro aguardando aprovação no momento.</div>')
-                                return
+                        status_analise = ('AGUARDANDO_ANALISE', 'PENDENTE', 'EM_ANALISE')
+                        itens_pendentes: list[tuple[str, str, dict[str, Any]]] = []
 
-                            with ui.element('div').classes('list-divided'):
-                                for u in pendentes:
-                                    nome_u = str(u.get('nome') or f"Usuário #{u.get('id')}")
-                                    perfil_raw = str(u.get('perfil') or 'USUARIO').upper()
-                                    tipo_lbl = _PERFIL_LABEL.get(perfil_raw, perfil_raw.capitalize())
-                                    with ui.element('div').classes('item'):
-                                        with ui.element('div').style('flex:1'):
-                                            h(f'<div class="item-title">{escape(nome_u)}</div>'
-                                              f'<div class="item-meta">{escape(tipo_lbl)}</div>')
-                                        ui.button(
-                                            'Analisar',
-                                            on_click=lambda _e, item=u: abrir_modal_analise(item),
-                                        ).props('flat dense no-caps').classes('badge b-amber').style(
-                                            'border:none;cursor:pointer'
-                                        )
+                        try:
+                            for u in listar_usuarios(status='AGUARDANDO_ANALISE'):
+                                perfil_raw = str(u.get('perfil') or 'USUARIO').upper()
+                                tipo_lbl = _PERFIL_LABEL.get(perfil_raw, perfil_raw.capitalize())
+                                itens_pendentes.append(('USUARIO', tipo_lbl, u))
                         except ApiError as exc:
                             if notificar_erro:
                                 ui.notify(exc.message, type='warning')
-                            linhas = ''.join(
-                                f'<div class="item"><div style="flex:1">'
-                                f'<div class="item-title">{escape(nome)}</div>'
-                                f'<div class="item-meta">{escape(tipo)}</div></div>'
-                                f'<button class="badge b-amber" style="border:none;cursor:pointer" '
-                                f'onclick="ecoToast(\'Análise de {escape(nome)} aberta.\')">'
-                                f'Analisar</button></div>'
-                                for nome, tipo in m.CADASTROS_EM_ANALISE
-                            )
-                            h(f'<div class="list-divided">{linhas}</div>')
+
+                        try:
+                            for inst in listar_instituicoes():
+                                if str(inst.get('tipo') or '').upper() == 'COOPERATIVA':
+                                    continue
+                                if str(inst.get('status') or '').upper() in status_analise:
+                                    itens_pendentes.append(('INSTITUICAO', 'Instituição', inst))
+                        except ApiError:
+                            pass
+
+                        try:
+                            for coop in listar_cooperativas():
+                                if str(coop.get('status') or '').upper() in status_analise:
+                                    itens_pendentes.append(('COOPERATIVA', 'Cooperativa', coop))
+                        except ApiError:
+                            pass
+
+                        if not itens_pendentes:
+                            h('<div class="muted" style="font-size:12px;padding:8px 0">'
+                              'Nenhum cadastro aguardando aprovação no momento.</div>')
+                            return
+
+                        with ui.element('div').classes('list-divided'):
+                            for categoria_p, tipo_lbl, item in itens_pendentes:
+                                nome_p = str(item.get('nome') or f"{tipo_lbl} #{item.get('id')}")
+                                with ui.element('div').classes('item'):
+                                    with ui.element('div').style('flex:1;min-width:0'):
+                                        h(f'<div class="item-title" style="font-size:14px;font-weight:600">{escape(nome_p)}</div>'
+                                          f'<div class="item-meta" style="font-size:12px;margin-top:2px">{escape(tipo_lbl)}</div>')
+                                    if categoria_p == 'USUARIO':
+                                        ui.button(
+                                            'Analisar',
+                                            on_click=lambda _e, u=item: abrir_modal_analise(u),
+                                        ).props('flat dense no-caps').classes('badge b-amber').style(
+                                            'border:none;cursor:pointer'
+                                        )
+                                    else:
+                                        ui.button(
+                                            'Analisar',
+                                            on_click=lambda _e, ent=item, cat=categoria_p: abrir_modal_editar_entidade(ent, cat),
+                                        ).props('flat dense no-caps').classes('badge b-amber').style(
+                                            'border:none;cursor:pointer'
+                                        )
 
                 carregar_pendentes_ref[0] = carregar_pendentes
                 carregar_pendentes(notificar_erro=False)
 
         carregar_listas_admin()
 
-
 @ui.page('/rotas')
-def planejamento_rotas() -> None:
+def rotas() -> None:
     if not obter_token():
         ui.navigate.to('/')
         return
 
     atualizar_sessao_atual()
     perfil = (obter_perfil_atual() or '').upper()
-    eh_admin = perfil == 'ADMINISTRADOR'
-    eh_motorista = perfil == 'MOTORISTA'
+    eh_admin = eh_administrador()
     eh_cooperativa = perfil == 'COOPERATIVA'
-
+    eh_motorista = perfil == 'MOTORISTA'
     with layout('/rotas'):
         page_header(
             'Rotas e entregas',
@@ -3387,7 +3425,6 @@ def planejamento_rotas() -> None:
         dialog_assinatura = ui.dialog()
         estado: dict[str, Any] = {'coleta_selecionada_id': None}
 
-        # --- Bloco exclusivo de COOPERATIVA / ADMIN: escalar motoristas ---
         @ui.refreshable
         def secao_escala_motoristas() -> None:
             if not (eh_cooperativa or eh_admin):
@@ -3437,8 +3474,10 @@ def planejamento_rotas() -> None:
                 coletas_escalaveis = [
                     c for c in todas_coletas
                     if str(c.get('status') or '').upper() in ('ENVIADA', 'AGENDADA', 'EM_ROTA')
-                    and c.get('idCooperativa') is not None
-                    and int(c['idCooperativa']) in coop_ids
+                    and (
+                        c.get('idCooperativa') is None
+                        or int(c['idCooperativa']) in coop_ids
+                    )
                 ]
 
                 if not coletas_escalaveis:
@@ -3446,10 +3485,12 @@ def planejamento_rotas() -> None:
                       'Nenhuma coleta vinculada à cooperativa aguardando escala de motorista no momento.</div>')
                     return
 
+                coop_padrao_id = int(coops[0]['id'])
+
                 with ui.element('div').classes('list-divided'):
                     for col in coletas_escalaveis:
                         col_id = int(col['id'])
-                        coop_id = int(col['idCooperativa'])
+                        coop_id = int(col['idCooperativa']) if col.get('idCooperativa') is not None else coop_padrao_id
                         st_raw = str(col.get('status') or '').upper()
                         st_lbl = _STATUS_COLETA_OPCOES.get(st_raw, st_raw)
                         mat_raw = str(col.get('tipoMaterial') or '').upper()
@@ -3459,19 +3500,28 @@ def planejamento_rotas() -> None:
                         local_str = f'{col.get("logradouro") or ""}, {col.get("numero") or ""} - {col.get("bairro") or ""}'
                         opcoes_mot = motoristas_por_coop.get(coop_id, {})
 
+                        mot_atribuido = (
+                            str(col.get('nomeMotorista') or col.get('motoristaNome') or '').strip()
+                            or _MOTORISTAS_ESCALADOS.get(col_id, '')
+                        )
+                        if not mot_atribuido and (col.get('idMotorista') or col.get('motoristaId')):
+                            mid_col = int(col.get('idMotorista') or col.get('motoristaId'))
+                            mot_atribuido = opcoes_mot.get(mid_col, f'Motorista #{mid_col}')
+
                         with ui.element('div').classes('item').style('flex-wrap:wrap;gap:12px'):
                             with ui.element('div').style('flex:1;min-width:220px'):
                                 h(
                                     f'<div class="item-title" style="font-size:14px">'
                                     f'Coleta #{col_id} • {escape(origem_str)}</div>'
                                     f'<div class="item-meta" style="font-size:12px">'
-                                    f'{escape(mat_lbl)} ({escape(qtd_str)}) • {escape(local_str)} • '
-                                    f'Cooperativa: {escape(str(col.get("nomeCooperativa") or ""))}</div>'
+                                    f'{escape(mat_lbl)} ({escape(qtd_str)}) • {escape(local_str)}</div>'
                                 )
 
                             h(f'<span class="badge b-blue">{escape(st_lbl)}</span>')
 
-                            if not opcoes_mot:
+                            if mot_atribuido:
+                                h(f'<span class="badge b-green">Motorista: {escape(mot_atribuido)}</span>')
+                            elif not opcoes_mot:
                                 h('<span class="muted" style="font-size:12px">'
                                   'Cadastre um motorista em Minha instituição</span>')
                             else:
@@ -3480,14 +3530,21 @@ def planejamento_rotas() -> None:
                                     value=next(iter(opcoes_mot.keys())),
                                 ).props('outlined dense hide-bottom-space options-dense').classes('eco-field').style('width:200px')
 
-                                def _escalar(c_id: int, select_ref: ui.select, status_atual: str) -> None:
+                                def _escalar(
+                                    c_id: int,
+                                    select_ref: ui.select,
+                                    status_atual: str,
+                                    mapa_m: dict[int, str],
+                                ) -> None:
                                     if select_ref.value is None:
                                         ui.notify('Selecione um motorista.', type='warning')
                                         return
+                                    mot_id = int(select_ref.value)
                                     try:
                                         if status_atual == 'ENVIADA':
                                             atualizar_status_coleta(c_id, 'AGENDADA', 'Agendada pela cooperativa')
-                                        atribuir_motorista_coleta(c_id, int(select_ref.value))
+                                        atribuir_motorista_coleta(c_id, mot_id)
+                                        _MOTORISTAS_ESCALADOS[c_id] = mapa_m.get(mot_id, f'Motorista #{mot_id}')
                                         ui.notify(f'Motorista escalado para a coleta #{c_id}!', type='positive')
                                         secao_escala_motoristas.refresh()
                                         conteudo_rotas.refresh()
@@ -3496,7 +3553,7 @@ def planejamento_rotas() -> None:
 
                                 eco_button(
                                     'Atribuir motorista',
-                                    lambda _e=None, cid_a=col_id, sm=sel_mot, sa=st_raw: _escalar(cid_a, sm, sa),
+                                    lambda _e=None, cid_a=col_id, sm=sel_mot, sa=st_raw, mm=opcoes_mot: _escalar(cid_a, sm, sa, mm),
                                     cls='dark',
                                 )
 
@@ -3653,6 +3710,7 @@ def planejamento_rotas() -> None:
 
                         try:
                             concluir_entrega_motorista(coleta_id, payload)
+                            _MOTORISTAS_ESCALADOS.pop(coleta_id, None)
                             ui.notify(
                                 f'Coleta #{coleta_id} concluída com assinatura registrada!',
                                 type='positive',
@@ -3864,7 +3922,6 @@ def minha_instituicao() -> None:
         ui.navigate.to('/')
         return
 
-    # Atualiza perfil/nome na sessão caso o admin tenha aprovado uma instituição
     atualizar_sessao_atual()
 
     with layout('/minha-instituicao'):
@@ -3880,20 +3937,20 @@ def minha_instituicao() -> None:
             inst_id = int(inst['id'])
             nome_inst = str(inst.get('nome') or f'Instituição #{inst_id}')
             tipo_inst = str(inst.get('tipo') or '').upper()
-            eh_coop = tipo_inst == 'COOPERATIVA'
+            if tipo_inst not in ('COOPERATIVA', 'CONDOMINIO'):
+                return
 
-            papeis_opcoes = (
-                {'MOTORISTA': 'Motorista', 'MORADOR': 'Morador'}
-                if eh_coop
-                else {'MORADOR': 'Morador'}
-            )
+            eh_coop = tipo_inst == 'COOPERATIVA'
             papel_padrao = 'MOTORISTA' if eh_coop else 'MORADOR'
+            papel_lbl = 'Motorista' if eh_coop else 'Morador'
+            titulo_modal = f'Motoristas • {nome_inst}' if eh_coop else f'Moradores • {nome_inst}'
 
             with dialog_membros, ui.card().style('width:560px;max-width:95vw;border-radius:16px;padding:20px'):
                 h(
-                    f'<div class="card-title" style="margin-bottom:4px">Membros • {escape(nome_inst)}</div>'
+                    f'<div class="card-title" style="margin-bottom:4px">{escape(titulo_modal)}</div>'
                     f'<div class="muted" style="font-size:13px;margin-bottom:14px">'
-                    f'Informe CPF e e-mail de um usuário já cadastrado e ativo na plataforma.</div>'
+                    f'Informe CPF e e-mail de um usuário já cadastrado e ativo na plataforma para vincular como '
+                    f'<strong>{escape(papel_lbl.lower())}</strong>.</div>'
                 )
 
                 with ui.element('div').classes('form-grid'):
@@ -3904,13 +3961,6 @@ def minha_instituicao() -> None:
                             props='mask="###########" inputmode="numeric"',
                         )
                         campo_email = form_field('E-mail do usuário', placeholder='usuario@email.com')
-
-                    with ui.element('div'):
-                        h('<label class="form-label">Papel na instituição</label>')
-                        sel_papel = ui.select(
-                            papeis_opcoes,
-                            value=papel_padrao,
-                        ).props('outlined dense hide-bottom-space options-dense').classes('eco-field')
 
                     lista_membros_box = ui.element('div').classes('w-full')
 
@@ -3931,7 +3981,7 @@ def minha_instituicao() -> None:
                                         nome_m = str(mem.get('nomeUsuario') or f'Usuário #{mem.get("usuarioId")}')
                                         email_m = str(mem.get('emailUsuario') or '-')
                                         cpf_m = str(mem.get('cpfUsuario') or '-')
-                                        papel_m = str(mem.get('papel') or 'MORADOR').upper()
+                                        papel_m = str(mem.get('papel') or papel_padrao).upper()
                                         tone_p = 'blue' if papel_m == 'MOTORISTA' else 'green'
 
                                         def _desvincular(membro_id: int, nome_alvo: str) -> None:
@@ -3975,9 +4025,9 @@ def minha_instituicao() -> None:
                                 inst_id,
                                 cpf_limpo,
                                 email_val,
-                                str(sel_papel.value or papel_padrao),
+                                papel_padrao,
                             )
-                            ui.notify('Membro vinculado com sucesso!', type='positive')
+                            ui.notify(f'{papel_lbl} vinculado(a) com sucesso!', type='positive')
                             campo_cpf.value = ''
                             campo_email.value = ''
                             carregar_membros()
@@ -3986,14 +4036,14 @@ def minha_instituicao() -> None:
 
                     with ui.row().classes('justify-end gap-2'):
                         eco_button(
-                            'Vincular membro',
+                            f'Vincular {papel_lbl.lower()}',
                             adicionar_membro,
                             cls='dark',
                             props='unelevated no-caps text-white',
                         ).style('background-color: #17693A !important; color: #FFFFFF !important;')
 
                     h('<div style="border-top:1px solid #EFEFEF;margin:6px 0"></div>'
-                      '<div style="font-size:13px;font-weight:600">Membros ativos</div>')
+                      f'<div style="font-size:13px;font-weight:600">{escape(papel_lbl)}es ativos</div>')
                     carregar_membros()
 
                 with ui.row().classes('justify-end').style('margin-top:12px'):
@@ -4084,17 +4134,19 @@ def minha_instituicao() -> None:
                                                 f'</div>'
                                             )
                                         elif st_raw == 'ATIVO':
-                                            rotulo_btn_membros = (
-                                                'Gerenciar motoristas e moradores'
-                                                if tipo_raw == 'COOPERATIVA'
-                                                else 'Gerenciar moradores'
-                                            )
                                             with ui.row().classes('gap-2').style('margin-top:12px'):
-                                                eco_button(
-                                                    rotulo_btn_membros,
-                                                    lambda _e=None, item=inst: _abrir_modal_membros(item),
-                                                    cls='dark',
-                                                )
+                                                if tipo_raw == 'COOPERATIVA':
+                                                    eco_button(
+                                                        'Gerenciar motoristas',
+                                                        lambda _e=None, item=inst: _abrir_modal_membros(item),
+                                                        cls='dark',
+                                                    )
+                                                elif tipo_raw == 'CONDOMINIO':
+                                                    eco_button(
+                                                        'Gerenciar moradores',
+                                                        lambda _e=None, item=inst: _abrir_modal_membros(item),
+                                                        cls='dark',
+                                                    )
                                                 eco_button(
                                                     'Ir para agendamentos',
                                                     lambda: ui.navigate.to('/agendamentos'),
@@ -4160,7 +4212,7 @@ def minha_instituicao() -> None:
                             campo_cidade = form_field('Cidade', placeholder='Eunápolis')
 
                         with ui.element('div').classes('form-grid cols-2'):
-                            campo_uf = form_field('UF', value='BA', placeholder='BA', props='mask="AA"')
+                            campo_uf = form_field('UF', options=_UFS_BRASIL, value=None)
                             campo_cep = form_field(
                                 'CEP',
                                 placeholder='45820000',
@@ -4198,7 +4250,7 @@ def minha_instituicao() -> None:
 
                             uf_val = (campo_uf.value or '').strip().upper()
                             if len(uf_val) != 2 or not uf_val.isalpha():
-                                ui.notify('Informe a UF com 2 letras (ex: BA).', type='warning')
+                                ui.notify('Selecione uma UF válida.', type='warning')
                                 return
 
                             cep_limpo = re.sub(r'\D', '', campo_cep.value or '')
@@ -4232,6 +4284,7 @@ def minha_instituicao() -> None:
                                 campo_numero.value = ''
                                 campo_bairro.value = ''
                                 campo_cidade.value = ''
+                                campo_uf.value = None
                                 campo_cep.value = ''
                                 conteudo_instituicao.refresh()
                             except ApiError as exc:

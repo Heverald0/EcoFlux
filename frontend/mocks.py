@@ -1,6 +1,6 @@
 """Dados mockados do EcoFlux (referencia: abril/2026).
 
-Tudo aqui e estatico e tipado - trocar por chamadas de API sem tocar nas telas.
+Tudo aqui e estatico e tipado - mas modelos de UI, moldes e blocos se baseiam nos mocks.
 """
 
 from __future__ import annotations

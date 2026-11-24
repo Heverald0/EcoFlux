@@ -479,7 +479,7 @@ def registration_page() -> None:
 
         tel_digitos = re.sub(r'\D', '', phone.value or '')
         if tel_digitos and len(tel_digitos) not in (10, 11):
-            ui.notify('Informe um celular/telefone válido com DDD (ex: 73998144693).', type='warning')
+            ui.notify('Informe um celular/telefone válido com DDD (ex: 73999999999).', type='warning')
             return
 
         if password.value != password_confirmation.value:
@@ -538,7 +538,7 @@ def registration_page() -> None:
 
                         with ui.element('div').classes('field-group'):
                             field_label('Celular / Telefone', required=False)
-                            phone = ui.input(placeholder='73998144693').props(
+                            phone = ui.input(placeholder='73999999999').props(
                                 'outlined hide-bottom-space mask="###########" inputmode="numeric" aria-label="Telefone"'
                             ).classes('eco-input')
 

@@ -339,7 +339,6 @@ def buscar_material_por_codigo(codigo: str) -> dict[str, Any]:
 
 
 def listar_usuarios(status: str | None = None) -> list[dict[str, Any]]:
-    """GET /api/v1/usuarios (opcionalmente filtrado por StatusCadastro)."""
     params: dict[str, str] = {}
     if status and status.strip():
         params['status'] = status.strip().upper()
@@ -572,7 +571,7 @@ def listar_minhas_coletas(status: str | None = None) -> list[dict[str, Any]]:
 
 
 def listar_coletas_operacional(status: str | None = None) -> list[dict[str, Any]]:
-    """GET /api/v1/coletas/operacional (opcionalmente filtrado por StatusColeta)."""
+    """GET /api/v1/coletas/operacional."""
     params: dict[str, str] = {}
     if status and status.strip():
         params['status'] = status.strip().upper()
@@ -849,7 +848,7 @@ def buscar_instituicao_por_id(instituicao_id: int) -> dict[str, Any]:
 
 
 def buscar_ecoimpacto_global() -> dict[str, Any]:
-    """GET /api/v1/ecoimpacto para obter o impacto ambiental consolidado."""
+    """GET /api/v1/ecoimpacto para obter o impacto ambiental."""
     try:
         with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as client:
             resp = client.get(

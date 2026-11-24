@@ -42,6 +42,10 @@ public class MembroInstituicaoServicoImpl implements MembroInstituicaoServico {
             throw new ExcecaoConflitoNegocio("Somente instituicoes do tipo COOPERATIVA podem vincular usuarios com a funcao de MOTORISTA.");
         }
 
+        if (requisicao.papel() == PapelMembroInstituicao.MORADOR && instituicao.getTipo() != TipoInstituicao.CONDOMINIO) {
+            throw new ExcecaoConflitoNegocio("Somente instituicoes do tipo CONDOMINIO podem vincular usuarios com a funcao de MORADOR.");
+        }
+
         String cpfLimpo = requisicao.cpf().replaceAll("[^0-9]", "").trim();
         String emailFormatado = requisicao.email().trim().toLowerCase();
 
@@ -70,21 +74,31 @@ public class MembroInstituicaoServicoImpl implements MembroInstituicaoServico {
             throw new ExcecaoConflitoNegocio("Este usuario ja e o Administrador Master responsavel por esta instituicao.");
         }
 
-        MembroInstituicao vinculo = membroRepositorio.findByInstituicaoAndUsuario(instituicao, usuarioPorCpf)
-                .map(existente -> {
-                    if (Boolean.TRUE.equals(existente.getAtivo())) {
-                        throw new ExcecaoConflitoNegocio("Este usuario ja esta vinculado como membro ativo desta instituicao.");
-                    }
-                    existente.setAtivo(true);
-                    existente.setPapel(requisicao.papel());
-                    return existente;
-                })
-                .orElseGet(() -> MembroInstituicao.builder()
-                        .instituicao(instituicao)
-                        .usuario(usuarioPorCpf)
-                        .papel(requisicao.papel())
-                        .ativo(true)
-                        .build());
+        MembroInstituicao existente = membroRepositorio.findByInstituicaoAndUsuario(instituicao, usuarioPorCpf)
+                .orElse(null);
+
+            if (existente != null && Boolean.TRUE.equals(existente.getAtivo())) {
+                throw new ExcecaoConflitoNegocio("Este usuario ja esta vinculado como membro ativo desta instituicao.");
+            }
+
+            if (requisicao.papel() == PapelMembroInstituicao.MORADOR
+                && membroRepositorio.existsByUsuarioIdAndPapelAndAtivoTrue(usuarioPorCpf.getId(), PapelMembroInstituicao.MORADOR)) {
+            throw new ExcecaoConflitoNegocio("Este usuario ja esta vinculado como morador ativo em outro condominio.");
+            }
+
+        MembroInstituicao vinculo;
+            if (existente != null) {
+                existente.setAtivo(true);
+                existente.setPapel(requisicao.papel());
+                vinculo = existente;
+            } else {
+            vinculo = MembroInstituicao.builder()
+                    .instituicao(instituicao)
+                    .usuario(usuarioPorCpf)
+                    .papel(requisicao.papel())
+                    .ativo(true)
+                    .build();
+        }
 
         MembroInstituicao salvo = membroRepositorio.save(vinculo);
 
