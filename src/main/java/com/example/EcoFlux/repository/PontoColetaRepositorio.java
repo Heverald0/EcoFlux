@@ -15,6 +15,8 @@ public interface PontoColetaRepositorio extends JpaRepository<PontoColeta, Long>
 
     boolean existsByNomeIgnoreCaseAndCidadeIgnoreCase(String nome, String cidade);
 
+    boolean existsByInstituicaoId(Long instituicaoId);
+
     @Query("""
             SELECT DISTINCT p FROM PontoColeta p
             LEFT JOIN p.materiaisAceitos m

@@ -15,4 +15,5 @@ public interface InstituicaoServico {
     List<InstituicaoResposta> listarComFiltros(TipoInstituicao tipo, StatusCadastro status);
     InstituicaoResposta buscarPorId(Long id, Usuario usuarioAutenticado);
     InstituicaoResposta atualizarStatus(Long id, AtualizarStatusCadastroRequisicao requisicao, Usuario adminAutenticado);
+    void deletar(Long id, Usuario usuarioAutenticado);
 }

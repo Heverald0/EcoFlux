@@ -63,4 +63,13 @@ public class PontoColetaControlador {
     ) {
         return ResponseEntity.ok(pontoColetaServico.alterarStatus(id, requisicao, usuarioAutenticado));
     }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletar(
+            @PathVariable Long id,
+            @AuthenticationPrincipal Usuario usuarioAutenticado
+    ) {
+        pontoColetaServico.deletar(id, usuarioAutenticado);
+        return ResponseEntity.noContent().build();
+    }
 }

@@ -63,4 +63,13 @@ public class InstituicaoControlador {
     ) {
         return ResponseEntity.ok(instituicaoServico.atualizarStatus(id, requisicao, usuarioAutenticado));
     }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deletar(
+            @PathVariable Long id,
+            @AuthenticationPrincipal Usuario usuarioAutenticado
+    ) {
+        instituicaoServico.deletar(id, usuarioAutenticado);
+        return ResponseEntity.noContent().build();
+    }
 }
