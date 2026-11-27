@@ -7,10 +7,13 @@ import com.example.EcoFlux.entity.Instituicao;
 import com.example.EcoFlux.entity.Usuario;
 import com.example.EcoFlux.entity.enums.PerfilUsuario;
 import com.example.EcoFlux.entity.enums.StatusCadastro;
+import com.example.EcoFlux.entity.enums.StatusColeta;
 import com.example.EcoFlux.entity.enums.TipoInstituicao;
 import com.example.EcoFlux.exception.ExcecaoConflitoNegocio;
 import com.example.EcoFlux.exception.ExcecaoRecursoNaoEncontrado;
+import com.example.EcoFlux.repository.ColetaRepositorio;
 import com.example.EcoFlux.repository.InstituicaoRepositorio;
+import com.example.EcoFlux.repository.PontoColetaRepositorio;
 import com.example.EcoFlux.repository.UsuarioRepositorio;
 import com.example.EcoFlux.service.InstituicaoServico;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +28,8 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
 
     private final InstituicaoRepositorio instituicaoRepositorio;
     private final UsuarioRepositorio usuarioRepositorio;
+    private final ColetaRepositorio coletaRepositorio;
+    private final PontoColetaRepositorio pontoColetaRepositorio;
 
     @Override
     @Transactional
@@ -129,6 +134,46 @@ public class InstituicaoServicoImpl implements InstituicaoServico {
         }
 
         return InstituicaoResposta.converter(instituicaoAtualizada);
+    }
+
+    @Override
+    @Transactional
+    public void deletar(Long id, Usuario usuarioAutenticado) {
+        Instituicao instituicao = instituicaoRepositorio.findById(id)
+                .orElseThrow(() -> new ExcecaoRecursoNaoEncontrado(
+                        String.format("Instituicao com ID %d nao encontrada.", id)
+                ));
+
+        boolean ehResponsavel = instituicao.getUsuarioResponsavel().getId().equals(usuarioAutenticado.getId());
+        boolean ehAdmin = usuarioAutenticado.getPerfil() == PerfilUsuario.ADMINISTRADOR;
+
+        if (!ehResponsavel && !ehAdmin) {
+            throw new ExcecaoConflitoNegocio("Acesso negado: apenas o responsavel ou um administrador pode excluir esta instituicao.");
+        }
+
+        List<StatusColeta> statusEmAndamento = List.of(
+                StatusColeta.ENVIADA, StatusColeta.AGENDADA, StatusColeta.EM_ROTA, StatusColeta.EM_ANDAMENTO
+        );
+
+        boolean possuiColetasAtivas = coletaRepositorio.existsByInstituicaoIdAndStatusIn(id, statusEmAndamento)
+                || coletaRepositorio.existsByCooperativaIdAndStatusIn(id, statusEmAndamento);
+
+        if (possuiColetasAtivas) {
+            throw new ExcecaoConflitoNegocio(
+                    "Nao e possivel excluir a instituicao enquanto houver coletas ativas ou em andamento vinculadas a ela."
+            );
+        }
+
+        boolean possuiHistoricoOuPontos = coletaRepositorio.existsByInstituicaoId(id)
+                || coletaRepositorio.existsByCooperativaId(id)
+                || pontoColetaRepositorio.existsByInstituicaoId(id);
+
+        if (possuiHistoricoOuPontos) {
+            instituicao.setStatus(StatusCadastro.INATIVO);
+            instituicaoRepositorio.save(instituicao);
+        } else {
+            instituicaoRepositorio.delete(instituicao);
+        }
     }
 
     private PerfilUsuario mapearPerfilResponsavel(TipoInstituicao tipo) {

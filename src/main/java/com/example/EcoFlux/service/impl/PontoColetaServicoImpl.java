@@ -109,6 +109,14 @@ public class PontoColetaServicoImpl implements PontoColetaServico {
     }
 
     @Override
+    @Transactional
+    public void deletar(Long id, Usuario usuarioAutenticado) {
+        PontoColeta ponto = buscarEntidadeEValidarPermissao(id, usuarioAutenticado);
+        ponto.getMateriaisAceitos().clear();
+        pontoColetaRepositorio.delete(ponto);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public PontoColetaResposta buscarPorId(Long id) {
         PontoColeta ponto = pontoColetaRepositorio.findById(id)

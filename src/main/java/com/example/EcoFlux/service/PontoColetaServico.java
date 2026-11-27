@@ -13,6 +13,7 @@ public interface PontoColetaServico {
     PontoColetaResposta cadastrar(PontoColetaRequisicao requisicao, Usuario usuarioAutenticado);
     PontoColetaResposta atualizar(Long id, PontoColetaRequisicao requisicao, Usuario usuarioAutenticado);
     PontoColetaResposta alterarStatus(Long id, AlterarStatusPontoRequisicao requisicao, Usuario usuarioAutenticado);
+    void deletar(Long id, Usuario usuarioAutenticado);
     PontoColetaResposta buscarPorId(Long id);
     List<PontoColetaResposta> listarComFiltros(StatusPontoColeta status, String bairro, TipoMaterial material);
 }

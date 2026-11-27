@@ -20,6 +20,11 @@ public interface ColetaRepositorio extends JpaRepository<Coleta, Long> {
 
     List<Coleta> findAllByInstituicaoId(Long instituicaoId);
 
+    boolean existsByInstituicaoId(Long instituicaoId);
+    boolean existsByCooperativaId(Long cooperativaId);
+    boolean existsByInstituicaoIdAndStatusIn(Long instituicaoId, List<StatusColeta> statuses);
+    boolean existsByCooperativaIdAndStatusIn(Long cooperativaId, List<StatusColeta> statuses);
+
     @Query("""
         SELECT c FROM Coleta c
         WHERE c.motorista.id = :motoristaId
